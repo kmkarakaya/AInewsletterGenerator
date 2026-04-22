@@ -1,0 +1,27 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;700;800;900&family=JetBrains+Mono:wght@400;700&display=swap');
+@import "tailwindcss";
+
+@theme {
+  --font-sans: "Inter", "Helvetica Neue", Arial, sans-serif;
+  --font-mono: "JetBrains Mono", "Courier New", monospace;
+  
+  --color-brand-bg: #0d0d0d;
+  --color-brand-surface: #1a1a1a;
+  --color-brand-accent: #00ff9d;
+  --color-brand-text: #f0f0f0;
+  --color-brand-dim: #888;
+  --color-brand-line: rgba(255, 255, 255, 0.1);
+}
+
+@layer base {
+  body {
+    @apply bg-brand-bg text-brand-text font-sans antialiased overflow-x-hidden;
+  }
+}
+
+@layer components {
+  .grid-bg {
+    background-image: radial-gradient(rgba(255, 255, 255, 0.1) 1px, transparent 1px);
+    background-size: 40px 40px;
+  }
+}
