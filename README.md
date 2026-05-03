@@ -1,75 +1,660 @@
-# Sistemin Teknik Mimarisi ve İşleyiş Rehberi: Otonom AI Bülten Üreticisi
+# AInewsletterGenerator
 
-Bu doküman, uygulamanın teknik altyapısını, data katmanlarını, sınırlamaları (limits/specs) ve execution flow (çalışma akışı) detaylarını mühendisler için açıklar.
+Bu repo, belirli YouTube kanallarındaki son içerikleri tarayıp teknik AI odaklı bir LinkedIn bülteni ve buna eşlik eden infografik görsel oluşturan tam yığın bir uygulamadır.
 
-## 1. Teknoloji Yığını (Tech Stack)
+Uygulama iki ana parçadan oluşur:
 
-*   **Frontend Katmanı**: React 19, Vite, Tailwind CSS v4, Framer Motion. İstemci (Client) tarafı sadece UI State'ini yönetir. LLM çağrıları `@google/genai` TypeScript SDK'sı aracılığıyla frontend üzerinden yürütülür.
-*   **Backend Katmanı (Proxy)**: Node.js, Express (`server.ts`). İstemcinin CORS ve Determinism sorunlarını aşması için video çekimi ve transkript indirme aşamaları backend proxy'sine devredilmiştir.
-*   **Yapay Zeka (LLM)**:
-    *   `gemini-3.1-flash-lite-preview`: Metin oluşturma alanında, transkript özetleme ve JSON yapılı ana bülten analiz/sentezi için kullanılır.
-    *   `gemini-2.5-flash-image`: Üretilen içeriği temsil eden infografik görseli sentezlemek için kullanılır.
+- React + Vite tabanlı istemci arayüzü
+- Express tabanlı backend proxy ve Gemini orkestrasyonu
 
----
+Önemli not: Gemini çağrıları artık sadece backend üzerinde çalışır. `GEMINI_API_KEY` istemci bundle'ına gömülmez.
 
-## 2. Sistem İşleyiş Dizisi (Execution Flow)
+## Ne Yapar?
 
-Uygulama çalıştırıldığında (Bülten Oluştur butonuna basıldığında) aşağıdaki adımlar ardışık (sequential) veya asenkron olarak gerçekleşir:
+Uygulama aşağıdaki zinciri çalıştırır:
 
-### Adım 1: Bağlantı ve Edge-Case Doğrulaması (`checkSourceConnection`)
-*   **İşlem**: Frontend, Gemini API anahtarının doğruluğunu ve hizmetin erişilebilirliğini test eder.
-*   **Spec**: Metin modeline basit bir dummy string ("CURRENT_TIME_AND_DATE_IN_UTC") gönderilerek Search Tool yeteneği test edilir. Özel bir yetki sorunu (403), kota limiti aşımları (429) veya network hatası olup olmadığı test edilir ve süreci bloke eder.
+1. Gemini bağlantısını ve Google Search tool erişimini doğrular.
+2. Girilen YouTube kanallarının son içeriklerini backend üzerinden toplar.
+3. Videoları popülerliğe göre sıralar ve en güçlü adayları seçer.
+4. Her video için transcript veya transcript yoksa açıklama verisini almaya çalışır.
+5. Ham veriyi Gemini ile Türkçe teknik özete dönüştürür.
+6. Bu özetlerden bir Türkçe LinkedIn bülteni üretir.
+7. Bültene göre ayrı bir image prompt üretir.
+8. Bu prompt ile 16:9 bir görsel üretir.
+9. Kullanıcı isterse aynı kaynak özetleri üzerinde son bülteni revize ettirir.
 
-### Adım 2: Deterministik Video Keşfi (`/api/channels/videos`)
-YouTube limitleri ve browser önbellek sorunlarından kaçınmak için bu aşama **Backend Express sunucusu** üzerinde gerçekleşir.
-*   **İşlem**: Kullanıcının girdiği kanal adları `@username` formatında backend'e iletilir.
-*   **Akış & Limitler**:
-    1.  `node-fetch` kullanılarak kanalın ana YouTube HTML sayfası çekilir.
-    2.  RegEx ile sayfa içindeki RSS Feed URL'i çıkartılır.
-    3.  Bulunan RSS XML feed'i indirilir ve `xml2js` ile parse edilir.
-    4.  **Tarih Limiti (Spec)**: Son **10 gün** içerisindeki gönderilen videolar filtrelenir.
-    5.  **Miktar Limiti (Spec)**: Her kanal için alınabilecek maksimum video sayısı **5** ile sınırlandırılmıştır.
-*   **Fallback (B Planı)**: Eğer RSS URL bulunamazsa, `yt-search` paketi (Puppeteer tabanlı olmayan scraper) devrededir ve manuel eşleşen ilk 3 son video çekilir.
+## Mimari Özeti
 
-### Adım 3: Transkript Çekimi ve Analizi (`fetchTranscriptData`)
-Bulunan tüm YouTube videolarının transkriptleri tamamen **gerçek veri** kullanılarak backend üzerinden toplanır ve frontend tarafındaki LLM ile anlamlı özetlere dönüştürülür. İşlem 2 evreden oluşur:
+### Frontend
 
-*   **Evre 3.1: Native Transkript API'si (Backend - `/api/transcript`)**
-    İstemci, video ID'sini proxy backend'ine gönderir. Sunucu, transkripte ulaşmak için dört aşamalı bir *Fallback Cascade* çalıştırır:
-    *   **Attempt 1**: `youtube-transcript` çalıştırılır. Saf YouTube API katmanıdır.
-    *   **Attempt 2**: Başarısız olursa `youtube-captions-scraper` ('en' dili için) devreye girer.
-    *   **Attempt 3**: O da başarısız olursa diğer yaygın diller ('tr', 'auto') içinscraper denenir.
-    *   **Attempt 4**: Tüm altyazı yöntemleri patlarsa, uygulamanın çalışmaya devam etmesi için `@distube/ytdl-core` ile videonun açıklamasına (description text) metadata üzerinden erişilir.
+Frontend tarafı ağırlıklı olarak [src/App.tsx](src/App.tsx) içinde orkestre edilir.
 
-*   **Evre 3.2: LLM ile Birebir Sentez ve Özetleme (Frontend)**
-    *   Backend tarafından başarıyla çekilen ham veri (mümkünse transkript, minimum açıklama metni) Frontend'e geri döner.
-    *   Eğer çekilen veri uzunsa, Frontend direkt olarak metin LLM modeline (`gemini-3.1-flash-lite-preview`) bağlanarak bir ara özetleme işlemi başlatır.
-    *   **Anti-Hallucination Kuralı:** Modele kesinlikle ham transkript dışından bilgi eklememesi emredilir. Elde edilen kısa, yoğun ve teknik özet daha sonra bülten aşamasında kullanılmak üzere saklanır.
+Başlıca sorumluluklar:
 
-### Adım 4: Prompt Enjeksiyonu ve Bülten Sentezlenmesi (`generateNewsletter`)
-Tüm başarılı kaynak özetleri ana Prompt'a enjekte edilir (`<sources_data>` bloğu) ve nihai haber oluşturulur.
+- Kanal listesini yönetmek
+- İlerleme durumu ve log ekranını göstermek
+- Kaynak videoları ve transcript işleme durumlarını göstermek
+- Oluşturulan bülten sürümlerini saklamak
+- Kullanıcıdan revizyon talimatı almak
+- Image prompt düzenleme ve görseli yeniden üretme akışını yönetmek
+- Ham transcript/özet verilerini kullanıcıya açmak
+- “Proof of Source” ekranını göstermek
 
-*   **Model**: `gemini-3.1-flash-lite-preview`
-*   **Spec (Structured Outputs)**: Bülten çıktısının kırılmamasını sağlamak adına API Schema kısıtlaması uygulanır. API'nin dönmesi gereken format katı bir şekilde tanımlanır (Response Schema): `{"content": string, "commonTopics": string[], ...}`.
-*   **İş Mantığı (LLM Yönergesi)**:
-    *   **Sıfır Halüsinasyon (Zero-Hallucination)**: Sadece ve sadece `sources_data` içerisindeki metinlere sadık kalınarak haber oluşturulması en katı kuralla emredilir.
-    *   Cross-Analysis (Çapraz Analiz): Videolar birbiriyle karşılaştırılarak ortak trendler bulunur.
-    *   Tasarım ve Stilleme: Markdown içerisinde "kalın yazı" (**text**) yasaklanmıştır (sade görünüm için). Haberler LinkedIn standartlarında, emoji bullet pointleriyle, profesyonel bir haber ajansı kimliğinde Türkçe olarak üretilir.
+Frontend doğrudan Gemini SDK kullanmaz. Tüm AI ve veri toplama çağrıları backend API uçlarına gider.
 
-### Adım 5: Görüntü (Infografik) Promptlama ve Çizim (`generateImage`)
-*   **Sub-Prompt Sentezi**: Ana bültenden üretilen şemasız haber metni alınır ve text LLM modeline gönderilerek "*Bu haberi temsil edecek detaylı bir İngilizce DALL-E/Midjourney tarzı Infografik promptu yaz*" komutu verilir.
-*   **Görsel Sentez**: Üretilen bu İngilizce Prompt, görüntü LLM modeline (`gemini-2.5-flash-image`) iletilir. Model, ilgili konuya ait 16:9 oranında bir görsel sentezler ve istemci bu base64 veriyi arayüzde gösterir.
+### Backend
 
-### Adım 6: Revizyon (Stateful Iteration) Sistemi
-Oluşturulan bültenin içeriğine müdahale etmek istenildiğinde:
-*   Frontend, uygulamanın state'inde tutulan *ESKİ İÇERİĞİ* ve yeni *MERGE PROMPT*'unu birleştirerek yeni bir talep yaratır ve LLM'e gönderir.
-*   Tüm geçmiş versiyonlar, history array'i sayesinde sol sidebar'de tutulur; eski üretimlere anında geçiş mümkündür.
+Backend tarafı [server.ts](server.ts) içinde yer alır.
 
----
+Başlıca sorumluluklar:
 
-## 3. Kurulum ve Bağımlılıklar
+- Ortam değişkenlerini yüklemek
+- Geliştirme modunda Vite middleware ile aynı süreçte frontend'i servis etmek
+- Production modunda `dist` klasörünü statik olarak servis etmek
+- YouTube kanal keşfini yapmak
+- Transcript alma fallback zincirini yürütmek
+- Gemini metin ve görsel çağrılarını yürütmek
+- Revizyon modunda son bülteni düzenlemek
 
-*   Projeyi klonladıktan sonra `npm install` komutuyla bağımlıkları yükleyin.
-*   `.env` (VEYA `.env.example` kopya) dosyasına `GEMINI_API_KEY` değişkenini girin. Backend için port sabit `3000`'dir. Uygulamayı ayağa kaldırmak için `npm run dev` (`tsx server.ts` çalıştırır) komutu yeterlidir.
+## Teknoloji Yığını
+
+### UI ve İstemci
+
+- React 19
+- Vite 6
+- Tailwind CSS v4
+- Motion
+- react-markdown
+- lucide-react
+
+### Backend ve Veri Toplama
+
+- Express
+- dotenv
+- xml2js
+- yt-search
+- youtube-transcript
+- youtube-captions-scraper
+- @distube/ytdl-core
+
+### LLM
+
+- `gemini-3.1-flash-lite-preview` metin işleri için
+- `gemini-2.5-flash-image` görsel üretimi için
+
+Model sabitleri [src/config.ts](src/config.ts) içinde tutulur.
+
+## Ortam Değişkenleri
+
+Örnek dosya: [.env.example](.env.example)
+
+Desteklenen değişkenler:
+
+- `GEMINI_API_KEY`: Backend Gemini çağrıları için zorunlu.
+- `PORT`: Express + Vite sunucusunun dinleyeceği port. Varsayılan `3005`.
+- `HOST`: Sunucu bind adresi. Varsayılan `0.0.0.0`.
+- `APP_URL`: Şu an doğrudan uygulama akışında kullanılmıyor; örnek dosyada yer alıyor.
+- `HMR_PORT`: İsteğe bağlı. Vite HMR websocket portu. Verilmezse `PORT + 1` kullanılır.
+- `DISABLE_HMR`: `true` ise HMR kapatılır.
+
+Not: Çalışan ortamda hem `GOOGLE_API_KEY` hem `GEMINI_API_KEY` tanımlıysa, `@google/genai` kütüphanesi `GOOGLE_API_KEY` kullanıldığına dair log üretebilir. Bu davranış kütüphane seviyesindedir.
+
+## Çalıştırma
+
+### Kurulum
+
+```bash
+npm install
+```
+
+`.env.example` dosyasını `.env` olarak kopyalayın ve en az `GEMINI_API_KEY` değerini doldurun.
+
+### Geliştirme
+
+```bash
+npm run dev
+```
+
+Bu komut tam yığın akışı çalıştırır:
+
+- Express backend ayağa kalkar
+- Geliştirme modunda Vite middleware aynı süreçte bağlanır
+- Frontend ve backend aynı origin altında servis edilir
+
+Port çakışıyorsa:
+
+PowerShell:
+
+```powershell
+$env:PORT=3010
+$env:HMR_PORT=3011
+npm run dev
+```
+
+### Derleme
+
+```bash
+npm run build
+```
+
+Bu komut sadece frontend `dist` çıktısını üretir.
+
+### Tip Denetimi
+
+```bash
+npm run lint
+```
+
+Bu script `tsc --noEmit` çalıştırır. Lint aracı değil, TypeScript type-check scriptidir.
+
+### Preview
+
+```bash
+npm run preview
+```
+
+Bu komut yalnızca Vite preview çalıştırır. Backend `/api/*` uçlarını servis etmez. Bu nedenle uygulamanın tam akışını doğrulamak için uygun değildir.
+
+### Clean
+
+```bash
+npm run clean
+```
+
+Bu script `rm -rf dist` kullanır. Windows PowerShell üzerinde her zaman taşınabilir değildir. Unix benzeri shell yoksa elle `dist` klasörünü silmek gerekebilir.
+
+## Gerçek İş Akışı
+
+Bu bölüm repodaki mevcut davranışı, kodun bugün yaptığı şekliyle anlatır.
+
+### 1. Başlangıç ve Bağlantı Kontrolü
+
+Kullanıcı “Bülteni Oluşturmaya Başla” butonuna bastığında frontend şu sırayı izler:
+
+1. Tüm UI state temizlenir.
+2. İlerleme çubuğu ve log terminali başlatılır.
+3. `/api/llm/check-connection` çağrılır.
+
+Backend bu uçta iki aşamalı kontrol yapar:
+
+- Basit bir `API_REACHABILITY_PULSE_CHECK`
+- Google Search tool ile `CURRENT_TIME_AND_DATE_IN_UTC`
+
+Amaç:
+
+- Anahtar geçerli mi
+- Model erişilebilir mi
+- Search tool yetkisi var mı
+
+Başarısız olursa süreç başta kesilir.
+
+### 2. Kanal Taraması
+
+Frontend kullanıcıya gecikmeli tarama hissi vermek için her kanal için log üretir. Ardından `/api/channels/videos` uç noktasına kanal listesini yollar.
+
+Varsayılan kanal listesi UI içinde gömülüdür ve kullanıcı tarafından değiştirilebilir.
+
+Mevcut varsayılanlar:
+
+- `@muratkarakayaakademi`
+- `@matthew_berman`
+- `@code (Wes Roth)`
+- `@SkillLeapAI`
+- `@OpenAI`
+- `@1littlecoder`
+
+Backend keşif davranışı:
+
+1. Kanal adı `@` ile başlamıyorsa normalize edilir.
+2. `https://www.youtube.com/@kanal` sayfası çekilir.
+3. HTML içinden RSS linki regex ile aranır.
+4. RSS bulunursa XML parse edilir.
+5. Son 10 gün içindeki videolar filtrelenir.
+6. Kanal başına maksimum 5 video eklenir.
+7. RSS bulunamazsa `yt-search` fallback kullanılır.
+8. Fallback modunda kanal ismine benzeyen ilk 3 video alınır.
+
+Notlar:
+
+- Tarih filtresi gerçek kodda 10 gündür, 7 gün değil.
+- Her kanal için toplanan ham video listesi daha sonra frontend tarafında popülerlik sıralamasına girer.
+
+### 3. En Popüler Videoların Seçilmesi
+
+Frontend keşfedilen videoları `views` alanına göre sıralar ve en fazla 5 videoyu analize alır.
+
+Sıralama mantığı:
+
+- Sayı dışı karakterler temizlenir
+- `M` milyon, `K` bin olarak yorumlanır
+
+Bu parsing kaba bir heuristic'tir. Beklenmeyen locale formatlarında hatalı sıralama ihtimali vardır.
+
+### 4. Transcript Alma Zinciri
+
+Her seçili video için frontend `/api/transcript` çağırır.
+
+Backend transcript çözümleme sırası:
+
+1. `youtube-transcript`
+2. `youtube-captions-scraper` `en`
+3. `youtube-captions-scraper` `tr`
+4. `youtube-captions-scraper` `auto`
+5. `@distube/ytdl-core` ile video açıklaması fallback
+
+Çıktı davranışı:
+
+- Gerçek transcript bulunduysa tam metin döner
+- Transcript yok ama açıklama varsa `TRANSCRIPT NOT FOUND. VIDEO DESCRIPTION INSTEAD:` önekiyle description döner
+- Hiçbiri yoksa boş metin ve hata mesajı döner
+
+### 5. Transcript Özetleme
+
+Frontend ham transcript'i aldıktan sonra bunu `/api/llm/transcript-summary` ile backend’e yollar.
+
+Backend burada:
+
+- Transcript'i en fazla 40.000 karaktere kırpar
+- Türkçe teknik özet promptu oluşturur
+- Hallucination yapmama kuralı uygular
+- Sonucu frontend'e döner
+
+Frontend davranışı:
+
+- Eğer summary anlamlıysa transcript yerine bunu kullanır
+- Summary boşsa ham transcript fallback olarak tutulur
+- Bu sonuç `processedSources` state'ine yazılır
+
+Yani bülten üretimi çoğu zaman tam transcript ile değil, transcript özetiyle yapılır.
+
+### 6. İlk Bülten Üretimi
+
+Frontend `/api/llm/newsletter` çağrısına `sources` dizisini yollar.
+
+Backend ilk üretim modunda şunları yapar:
+
+- `sources_data` bloğu oluşturur
+- Her kaynağın başlık, kanal, tarih ve transcript/summary içeriğini prompta gömer
+- JSON schema enforced yanıt ister
+- `content`, `sourcesFound`, `sources`, `commonTopics` alanlarını üretir
+
+Kurallar:
+
+- Sadece kaynak bloktan üretim
+- Geçmiş bilgi eklememe
+- Türkçe çıktı
+- Kalın markdown kullanmama
+- YouTube, kanal adı ve "video" kelimesinden kaçınma
+
+### 7. Image Prompt ve Görsel Üretimi
+
+Backend bülten metni oluştuktan hemen sonra ikinci bir metin çağrısı ile image prompt üretir.
+
+Ardından frontend bu image prompt'u `/api/llm/image` uç noktasına yollar.
+
+Backend burada:
+
+- `gemini-2.5-flash-image` ile 16:9 oranlı görsel üretir
+- Inline binary veriyi data URL formatına çevirir
+- `imageUrl` alanı ile frontend'e döner
+
+Frontend bu görseli:
+
+- Önizleme olarak gösterir
+- History şeklinde saklayabilir
+- İndirme linki sunar
+
+### 8. Revizyon Akışı
+
+Bu repo artık iki ayrı newsletter modu kullanır:
+
+- İlk üretim modu
+- Revizyon modu
+
+Kullanıcı “Yeni Metin Oluştur” butonuna bastığında frontend şu üç veriyi birlikte yollar:
+
+- `processedSources`
+- `revisionPrompt`
+- `result.content` yani son üretilmiş bülten
+
+Backend revizyon modunda:
+
+- Son bülteni ana taslak kabul eder
+- Kullanıcı düzeltmesini doğrudan uygular
+- `sources_data` içeriğini doğruluk sınırı olarak kullanır
+- Gereksiz sıfırdan üretim yerine gerçek bir düzenleme yapması için yönlendirir
+- Ortak konuları yeniden hesaplar
+
+Bu davranışın amacı:
+
+- Son newsletter üzerinde iteratif düzenleme yapmak
+- Ama yine de transcript özetlerinden kopmamak
+
+Başarılı revizyonda frontend:
+
+- Yeni içeriği `result.content` içine yazar
+- Eski sürümü `contentHistory` içinde tutar
+- Yeni image prompt üretir
+- İsterse görseli de otomatik yeniler
+
+### 9. Raw Data ve Proof of Source
+
+UI sonucu ürettikten sonra iki önemli doğrulama yüzeyi gösterir.
+
+#### Ham Veri Görünümü
+
+Kullanıcı “Yapay zekanın okuduğu ham verileri incele” alanını açarsa:
+
+- Her kaynağın başlığı
+- URL'si
+- İzlenme bilgisi
+- Tarihi
+- Transcript ya da transcript özetini
+
+görür.
+
+Not: Buradaki alan adı transcript gibi görünse de pratikte transcript özeti de olabilir.
+
+#### Proof of Source
+
+Bu alan kullanıcıya şunları gösterir:
+
+- Kaynak başlığı
+- Kanal
+- İzlenme
+- Tarih
+- Transcript erişim durumu
+
+Bu bölüm doğrulama hissi vermek için vardır; resmi API kanıtı anlamına gelmez.
+
+## API Uçları
+
+### `POST /api/llm/check-connection`
+
+Gemini erişimini ve Google Search tool yetkisini test eder.
+
+Bu uç ve diğer tüm `/api/llm/*` uçları hafif bir in-memory rate limit ile korunur.
+
+Mevcut limit:
+
+- 60 saniyede istemci başına 12 istek
+
+Örnek yanıt:
+
+```json
+{
+    "status": "connected",
+    "service": "YouTube Search Service",
+    "message": "YouTube/Google veri kanalları açık. Sistem operasyona hazır."
+}
+```
+
+### `POST /api/llm/transcript-summary`
+
+İstek gövdesi:
+
+```json
+{
+    "transcript": "..."
+}
+```
+
+Yanıt:
+
+```json
+{
+    "summary": "..."
+}
+```
+
+### `POST /api/llm/newsletter`
+
+İstek gövdesi:
+
+```json
+{
+    "sources": [],
+    "revisionPrompt": "İsteğe bağlı",
+    "lastContent": "İsteğe bağlı"
+}
+```
+
+Yanıt şeması:
+
+```json
+{
+    "content": "...",
+    "imagePrompt": "...",
+    "sourcesFound": true,
+    "sources": [],
+    "commonTopics": []
+}
+```
+
+### `POST /api/llm/image`
+
+İstek gövdesi:
+
+```json
+{
+    "prompt": "..."
+}
+```
+
+Yanıt:
+
+```json
+{
+    "imageUrl": "data:image/png;base64,..."
+}
+```
+
+### LLM hata formatı
+
+`/api/llm/*` uçları hata durumunda standart bir JSON zarfı döner:
+
+```json
+{
+    "error": {
+        "code": "RATE_LIMITED",
+        "message": "LLM istek limiti aşıldı. Lütfen kısa bir süre sonra tekrar deneyin.",
+        "details": "Allowed 12 requests per 60 seconds."
+    }
+}
+```
+
+Olası `error.code` değerleri:
+
+- `BAD_REQUEST`
+- `RATE_LIMITED`
+- `LLM_PERMISSION`
+- `LLM_QUOTA`
+- `INTERNAL_ERROR`
+
+### `POST /api/channels/videos`
+
+İstek gövdesi:
+
+```json
+{
+    "channels": ["@OpenAI", "@muratkarakayaakademi"]
+}
+```
+
+Yanıt:
+
+```json
+{
+    "videos": [
+        {
+            "channel": "@OpenAI",
+            "date": "2026-05-01",
+            "title": "...",
+            "views": "150000",
+            "videoId": "...",
+            "url": "https://..."
+        }
+    ]
+}
+```
+
+### `POST /api/transcript`
+
+İstek gövdesi:
+
+```json
+{
+    "videoId": "..."
+}
+```
+
+Yanıt:
+
+```json
+{
+    "text": "..."
+}
+```
+
+## Önemli Dosyalar
+
+- [server.ts](server.ts): Tüm backend, Gemini entegrasyonu ve API uçları
+- [src/App.tsx](src/App.tsx): Uygulama orkestrasyonu ve ana UI
+- [src/services/geminiService.ts](src/services/geminiService.ts): Frontend API istemcileri
+- [src/config.ts](src/config.ts): Model sabitleri
+- [vite.config.ts](vite.config.ts): Vite yapılandırması ve HMR port yönetimi
+- [.env.example](.env.example): Ortam değişkeni örneği
+
+## Repo Yapısı
+
+Kısa görünüm:
+
+```text
+.
+├─ server.ts
+├─ package.json
+├─ tsconfig.json
+├─ vite.config.ts
+├─ metadata.json
+├─ index.html
+├─ src/
+│  ├─ App.tsx
+│  ├─ config.ts
+│  ├─ index.css
+│  ├─ main.tsx
+│  └─ services/
+│     └─ geminiService.ts
+└─ README.md
+```
+
+## Test Durumu
+
+Repoda bir test frameworkü yoktur.
+
+Yani şunlar yok:
+
+- Vitest
+- Jest
+- Playwright test suite
+- entegre `npm test`
+
+Daha önce repoda bazı manuel deneme scriptleri bulunuyordu; bunlar artık kaldırılmıştır. Şu an otomatik CI test altyapısı da, root altında ad-hoc test scriptleri de yoktur.
+
+## Bilinen Kısıtlar ve Davranışlar
+
+### 1. Üretim ve preview farklı şeylerdir
+
+`npm run build` frontend bundle üretir. Tek başına tam uygulamayı ayağa kaldırmaz.
+
+`npm run preview` backend API'leri olmadan çalışır.
+
+### 2. Transcript yoksa description kullanılabilir
+
+Bu durumda sonuç hala analiz edilir, ama transcript kalitesi ile aynı güven seviyesinde değildir.
+
+### 3. Transcript alanı UI'da her zaman literal transcript olmayabilir
+
+Repo bazı akışlarda transcript özeti ya da açıklama fallback'i gösterir.
+
+### 4. Görsel üretimi her zaman garanti değildir
+
+`/api/llm/image` boş `imageUrl` dönebilir veya quota/permission hatasına düşebilir.
+
+### 5. Port çakışmaları beklenen durumdur
+
+Bu repo artık portu `.env` veya shell üzerinden değiştirilebilir şekilde tasarlanmıştır.
+
+### 6. View parsing heuristiktir
+
+`K` ve `M` parse edilir. Tüm locale formatlarını garanti etmez.
+
+### 7. Frontend logları kısmen simülasyon içerir
+
+Bazı log satırları kullanıcı deneyimi için bilinçli gecikme ve sahnelenmiş ilerleme hissi üretir. Yani tüm loglar birebir gerçek backend event stream değildir.
+
+### 8. API key istemcide değildir
+
+Bu repo güvenlik açısından eski sürüme göre daha doğru yapıdadır. Gemini anahtarı artık istemci bundle içinde bulunmamalıdır.
+
+## Sorun Giderme
+
+### Port doluysa
+
+PowerShell:
+
+```powershell
+$env:PORT=3010
+$env:HMR_PORT=3011
+npm run dev
+```
+
+### `GEMINI_API_KEY is not configured on the server` hatası
+
+`.env` dosyasını kontrol edin ve backend'in aynı çalışma dizininden başlatıldığından emin olun.
+
+### `IMAGE_GEN_PERMISSION` hatası
+
+Görsel modeli için yetki yoktur ya da hesap politikasına takılmıştır.
+
+### `IMAGE_GEN_QUOTA` hatası
+
+Görsel üretim kotası aşılmıştır.
+
+### `RATE_LIMITED` hatası
+
+Çok kısa sürede çok fazla `/api/llm/*` isteği gönderilmiştir. `Retry-After` başlığı beklenebilir.
+
+### Google Search yetki hatası
+
+Anahtarın Search tool erişimi kapalı olabilir.
+
+### `npm run preview` çalışıyor ama uygulama iş akışı bozuk
+
+Beklenen davranıştır. Preview backend API sağlamaz.
+
+## Güvenlik Notu
+
+Bu repo artık şu güvenlik iyileştirmesini içerir:
+
+- Gemini çağrıları backend'e taşınmıştır
+- `GEMINI_API_KEY` frontend bundle'a inject edilmez
+
+Yine de şu noktalar ayrıca değerlendirilebilir:
+
+- rate limiting
+- request validation şemasının güçlendirilmesi
+- structured logging
+- backend route bazlı auth gereksinimi
+
+## Geliştirme İçin Doğru Mental Model
+
+Bu projeyi geliştirirken doğru model şudur:
+
+- Frontend bir orkestratör ve görselleştirici
+- Backend hem veri toplayıcı hem LLM gateway
+- Transcript özeti, newsletter üretiminin asıl yakıtı
+- Revizyon modu sıfırdan üretim değil, son newsletter üzerinde kontrollü edit akışı
+
+Bu README, mevcut repo davranışını kodun şu an yaptığı haliyle belgelemek için güncellenmiştir.
 
 

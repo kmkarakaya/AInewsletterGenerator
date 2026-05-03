@@ -1,8 +1,3 @@
-import { GoogleGenAI, Type } from "@google/genai";
-import { AI_MODELS } from "../config";
-
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
-
 export interface VideoSource {
   channel: string;
   date: string;
@@ -32,50 +27,33 @@ export interface NewsletterResult {
   commonTopics?: string[];
 }
 
+async function postJson<T>(url: string, body: unknown): Promise<T> {
+  const response = await fetch(url, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  });
+
+  const result = await response.json();
+  if (!response.ok) {
+    const normalizedMessage = typeof result.error === 'string'
+      ? result.error
+      : result.error?.message || result.message || `Request failed: ${response.status}`;
+    throw new Error(normalizedMessage);
+  }
+
+  return result as T;
+}
+
 export const checkSourceConnection = async (): Promise<ApiConnectionStatus> => {
   try {
-    // Phase 1: Basic API Connectivity
-    // We send a very simple prompt to verify the API key is valid.
-    const basicCheck = await ai.models.generateContent({
-      model: AI_MODELS.TEXT_GENERATION,
-      contents: "API_REACHABILITY_PULSE_CHECK",
-    });
-
-    if (!basicCheck) throw new Error("API base layers unreachable.");
-
-    // Phase 2: Attempt standard prompt
-    const searchCheck = await ai.models.generateContent({
-      model: AI_MODELS.TEXT_GENERATION,
-      contents: "CURRENT_TIME_AND_DATE_IN_UTC",
-      config: { 
-        tools: [{ googleSearch: {} }]
-      }
-    });
-    
-    if (searchCheck) {
-      return { 
-        status: 'connected', 
-        service: 'YouTube Search Service', 
-        message: 'YouTube/Google veri kanalları açık. Sistem operasyona hazır.' 
-      };
-    }
-    throw new Error("No response from AI service components");
+    return await postJson<ApiConnectionStatus>('/api/llm/check-connection', {});
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
-    let userSuggestion = "Lütfen 5-10 dakika sonra tekrar deneyin.";
-    
-    if (errorMsg.includes("403") || errorMsg.includes("PERMISSION_DENIED")) {
-      userSuggestion = "API KEY YETKİ HATASI: Gemini API anahtarınızın 'Google Search' (Arama) yetkisi kapalı. Lütfen Google AI Studio -> API Key -> Search Tool ayarlarını kontrol edin.";
-    } else if (errorMsg.includes("quota") || errorMsg.includes("429") || errorMsg.includes("limit")) {
-      userSuggestion = "KOTA SINIRI: Kullanım limitine takıldınız. Lütfen 30 dakika bekleyiniz.";
-    } else if (errorMsg.includes("network") || errorMsg.includes("connection")) {
-      userSuggestion = "AĞ HATASI: İnternet veya backend servislerine ulaşılamıyor. Lokasyonunuzdaki filtreleri kontrol edin.";
-    }
-
-    return { 
-      status: 'error', 
-      service: 'YouTube Search Service', 
-      message: `Bağlantı Katmanı Hatası: ${errorMsg}. ${userSuggestion}` 
+    return {
+      status: 'error',
+      service: 'YouTube Search Service',
+      message: `Bağlantı Katmanı Hatası: ${errorMsg}. Lütfen 5-10 dakika sonra tekrar deneyin.`,
     };
   }
 };
@@ -102,8 +80,6 @@ export const searchSources = async (channels: string[]): Promise<VideoSource[]> 
 
 export const fetchTranscriptData = async (videoId: string, url?: string, onStatus?: (msg: string) => void): Promise<string> => {
   try {
-    const videoUrl = url || `https://www.youtube.com/watch?v=${videoId}`;
-    
     // AŞAMA 1: Backend proxy üzerinden asıl transkripti çek (youtube-transcript vb.)
     onStatus?.(`[AŞAMA 1] Proxy üzerinden ${videoId} videosunun ham transkripti çekiliyor...`);
     const rawTranscript = await fallbackFetchTranscript(videoId);
@@ -115,32 +91,14 @@ export const fetchTranscriptData = async (videoId: string, url?: string, onStatu
       }
 
       onStatus?.(`[AŞAMA 2] Ham transkript proxyden çekildi (${rawTranscript.length} karakter). Bültende kullanılmak üzere LLM ile özetleniyor...`);
-      
-      const prompt = `
-        Sen uzaman bir teknik analizci ve veri madencisisin.
-        Aşağıda bir YouTube videosundan çekilmiş ham transkript (altyazı dökümü) bulunmaktadır.
-        
-        GÖREV: Bu transkripti okuyup, profesyonel bir haber bülteninde kullanılmak üzere
-        videonun özünü, en önemli teknik duyurularını, yeni tanıtılan araç/versiyonları 
-        ve çözülen problemleri anlatan kapsamlı, madde madde bir teknik özet çıkarmaktır.
-        
-        ÇOK KRİTİK KURALLAR:
-        1. SADECE aşağidaki ham transkriptte olan bilgileri özetle. DIŞARIDAN, GEÇMİŞTEN VEYA GENEL KÜLTÜRDEN HİÇBİR BİLGİ UYDURMA, EKLEME (HALLUCINATION YAPMA).
-        2. Çıktıyı tamamen Türkçe ver.
-        3. Yazım tarzın profesyonel, net ve bilgi yoğun olsun.
 
-        HAM TRANSKRİPT:
-        ${rawTranscript.substring(0, 40000)}
-      `;
-
-      const response = await ai.models.generateContent({
-        model: AI_MODELS.TEXT_GENERATION,
-        contents: prompt
+      const result = await postJson<{ summary: string }>('/api/llm/transcript-summary', {
+        transcript: rawTranscript,
       });
 
-      if (response.text && response.text.length > 50) {
+      if (result.summary && result.summary.length > 50) {
         onStatus?.(`[BAŞARILI] Transkript LLM tarafından başarıyla özetlendi ve analiz edildi.`);
-        return response.text;
+        return result.summary;
       }
       
       onStatus?.(`[UYARI] LLM özetlemesi boş döndü, mecbur ham veriyi aktarıyoruz.`);
@@ -174,125 +132,11 @@ const fallbackFetchTranscript = async (videoId: string): Promise<string> => {
 
 export const generateNewsletter = async (sources: VideoSource[], revisionPrompt?: string, lastContent?: string): Promise<NewsletterResult> => {
   try {
-    const today = new Date();
-    const lastWeek = new Date(today);
-    lastWeek.setDate(today.getDate() - 7);
-    
-    // Format dates for Turkish format
-    const dateFormatter = new Intl.DateTimeFormat('tr-TR', { day: 'numeric', month: 'long', year: 'numeric' });
-    const todayStr = dateFormatter.format(today);
-    const lastWeekStr = dateFormatter.format(lastWeek);
-    const dateRangeStr = `${lastWeek.getDate()} - ${todayStr}`;
-    const currentDateEN = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-    const lastWeekEN = lastWeek.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
-
-    const sourcesContext = sources.map(s => `- ${s.title} (${s.channel}, ${s.date})\n  Transcript/Summary: ${s.transcript?.substring(0, 15000) || "No transcript"}`).join("\n\n");
-    
-    let revisionContext = "";
-    if (revisionPrompt && lastContent) {
-      revisionContext = `
-      USER REVISION REQUEST:
-      The user wants to rewrite the previous newsletter with the following instructions:
-      "${revisionPrompt}"
-
-      PREVIOUS NEWSLETTER CONTENT:
-      ${lastContent}
-
-      You MUST apply the user's revision request to create the newly generated newsletter. Keep the overall structure but apply their requests carefully.
-      `;
-    }
-
-    const prompt = `
-      Current Date: ${currentDateEN}.
-      Target Period: ${lastWeekEN} - ${currentDateEN}.
-      
-      ANALYZING TOP ${sources.length} TRENDING VIDEOS:
-      <sources_data>
-      ${sourcesContext}
-      </sources_data>
-      
-      ${revisionContext}
-
-      TASK:
-      1. Deeply analyze the <sources_data> block. This block contains transcripts or detailed technical summaries of ONLY these top ${sources.length} videos.
-      2. EXTREMELY CRITICAL ANTI-HALLUCINATION RULE: You are strictly forbidden from writing about any news, events, or technologies not explicitly detailed in the <sources_data> block. Do not bring in historical context, general knowledge, or previous news. If the text says "No transcript" or has no data, skip that video entirely. If NO video has relevant data, just output "Bu hafta herhangi bir spesifik veri kaynağı bulunamadı."
-      3. CROSS-ANALYSIS: Identify if there are common news, overlapping technical concepts, or shared announcements discussed across these transcripts. List these common topics clearly.
-      4. Focus on "The Most Impactful Shared Trends" of the week strictly found in these sources.
-      5. Generate a LinkedIn newsletter for "Murat Karakaya Akademi" in TURKISH based ONLY on the <sources_data>.
-      6. PRIORITY: If common topics exist within the <sources_data>, lead with them as the core highlight of the week. Summarize their technical essence based solely on the provided text.
-      
-      6. RULES:
-         - Professional news agency style.
-         - NO bold text formatting (**text**) should be used anywhere in the generated text.
-         - NO mention of YouTube, channel names, or "video" in the text.
-         - DO NOT write the section labels like "Ana Başlık:", "Giriş:", "Kapanış:", "Soru:", "Hashtagler:". Instead, just use the relevant emojis and write the section content directly.
-         - Format Example:
-           🚀 Haftanın Yapay Zeka Gündemi (${dateRangeStr})
-           🌐 [Haftanın en çok dikkat çeken ortak konusunu özetleyen vurucu cümle]
-           
-           Haber Maddeleri (Öncelikle ortak konular, sonra videolardaki tekil devrim niteliğindeki gelişmeler):
-           📰 [Haber Başlığı]
-           ⚙️ Gelişme: Transkriptlerden gelen teknik özet (Maks. 3 cümle).
-           🎯 Neden Önemli?: Stratejik avantaj ve sektörel etki.
-           
-           🔮 [Murat Karakaya Akademi'den bir öngörü]
-           💬 [Takipçilere teknik bir tartışma sorusu]
-           🏷️ #MuratKarakayaAkademi [relevant tech tags]
-
-      OUTPUT SCHEMA:
-      {
-        "content": "Full Turkish newsletter text",
-        "sourcesFound": true,
-        "sources": [
-          { "channel": "@example", "date": "2026-04-15", "title": "Top Trend Video", "views": "150K" }
-        ],
-        "commonTopics": ["Topic 1", "Topic 2"]
-      }
-    `;
-
-    const response = await ai.models.generateContent({
-      model: AI_MODELS.TEXT_GENERATION,
-      contents: prompt,
-      config: {
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            content: { type: Type.STRING },
-            sourcesFound: { type: Type.BOOLEAN },
-            sources: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  channel: { type: Type.STRING },
-                  date: { type: Type.STRING },
-                  title: { type: Type.STRING },
-                  views: { type: Type.STRING }
-                },
-                required: ["channel", "date", "title", "views"]
-              }
-            },
-            commonTopics: {
-              type: Type.ARRAY,
-              items: { type: Type.STRING }
-            }
-          },
-          required: ["content", "sourcesFound", "sources", "commonTopics"]
-        }
-      }
+    return await postJson<NewsletterResult>('/api/llm/newsletter', {
+      sources,
+      revisionPrompt,
+      lastContent,
     });
-
-    const result = JSON.parse(response.text || "{}");
-    
-    // Step 2: Now that we have the newsletter content, dynamically generate the image prompt
-    if (result.content && result.content.length > 10) {
-      result.imagePrompt = await generateImagePromptForNewsletter(result.content);
-    } else {
-      result.imagePrompt = "Detailed tech infographic, mind map style, flat vector art, modern corporate tech style.";
-    }
-    
-    return result;
   } catch (error) {
     console.error("Gemini Error:", error);
     return {
@@ -305,69 +149,14 @@ export const generateNewsletter = async (sources: VideoSource[], revisionPrompt?
   }
 };
 
-export const generateImagePromptForNewsletter = async (newsletterContent: string): Promise<string> => {
-  try {
-    const prompt = `
-      I have just generated a technical newsletter in Turkish.
-      Read the newsletter below and write a highly detailed, extremely specific English image generation prompt to create an infographic that perfectly represents the precise topics discussed.
-
-      NEWSLETTER CONTENT:
-      ${newsletterContent}
-
-      INSTRUCTIONS:
-      - The image MUST be a professional, high-quality, modern "INFOGRAPHIC" or "mind map" suitable for a LinkedIn post.
-      - Visually represent the core AI/tech tools, models, and concepts mentioned in the text (e.g. if the text mentions specific LLMs like GPT-5, Claude, or specific technologies, include these concepts visually).
-      - Do NOT just write one large word. Instead, ask the image AI to render multiple key technical terms and concepts as a well-structured infographic, interconnected diagram, or mind map.
-      - Request a solid dark blue background, bright legible white, cyan, and orange typography, connecting lines and glowing nodes representing data.
-      - Output ONLY the English prompt string, without any other conversational text or markdown formatting.
-    `;
-
-    const response = await ai.models.generateContent({
-      model: AI_MODELS.TEXT_GENERATION,
-      contents: prompt
-    });
-
-    return response.text ? response.text.trim() : "Detailed tech infographic, mind map style, flat vector art, modern corporate tech style.";
-  } catch (error) {
-    console.error("Gemini Image Prompt Error:", error);
-    return "Detailed tech infographic, mind map style, flat vector art, modern corporate tech style.";
-  }
-};
-
 export const generateImage = async (prompt: string): Promise<string | null> => {
   try {
-    const response = await ai.models.generateContent({
-      model: AI_MODELS.IMAGE_GENERATION,
-      contents: {
-        parts: [
-          { text: prompt }
-        ]
-      },
-      config: {
-        imageConfig: {
-          aspectRatio: "16:9"
-        }
-      }
+    const response = await postJson<{ imageUrl: string | null }>('/api/llm/image', {
+      prompt,
     });
-
-    const parts = response.candidates?.[0]?.content?.parts;
-    if (parts) {
-      for (const part of parts) {
-        if (part.inlineData) {
-          return `data:${part.inlineData.mimeType};base64,${part.inlineData.data}`;
-        }
-      }
-    }
-    
-    // If no inline data, check for errors in the response text
-    if (response.text) {
-      console.warn("AI returned text instead of image:", response.text);
-    }
-    
-    return null;
+    return response.imageUrl;
   } catch (error) {
     console.error("Image generation error:", error);
-    // Categorize error for better logging
     const errorMsg = error instanceof Error ? error.message : String(error);
     if (errorMsg.includes("403") || errorMsg.includes("permission")) {
       throw new Error("IMAGE_GEN_PERMISSION: Görsel oluşturma modeli için yetki hatası.");
