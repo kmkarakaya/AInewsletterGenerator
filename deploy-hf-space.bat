@@ -8,6 +8,7 @@ set "SPACE_REMOTE_NAME=hf-space"
 set "SPACE_REMOTE_URL=https://huggingface.co/spaces/%SPACE_ID%"
 set "HF_USERNAME=kmkarakaya"
 set "DOCKER_IMAGE_NAME=ai-newsletter-generator-hf-check"
+set "TEMP_DEPLOY_DIR=%TEMP%\hf-space-deploy-%RANDOM%-%RANDOM%"
 
 echo.
 echo === HF Space Deploy ===
@@ -74,18 +75,42 @@ if not errorlevel 1 goto :maybe_dry_run
 set "PUSH_TARGET=https://%HF_USERNAME%:%HF_TOKEN%@huggingface.co/spaces/%SPACE_ID%"
 
 :maybe_dry_run
-if /I "%DRY_RUN%"=="1" (
-  echo [5/6] Dry run aktif. Push atlandi.
-  echo Push target: %SPACE_REMOTE_URL%
-  goto :success
-)
-
-echo [5/6] Hugging Face Space'e push yapiliyor...
-echo Bu islem sadece %SPACE_REMOTE_NAME% remote'unu force update eder.
-git push --force %PUSH_TARGET% HEAD:main
+echo [5/6] Deploy snapshot hazirlaniyor...
+if exist "%TEMP_DEPLOY_DIR%" rmdir /s /q "%TEMP_DEPLOY_DIR%"
+mkdir "%TEMP_DEPLOY_DIR%"
 if errorlevel 1 goto :fail
 
-echo [6/6] Deploy tamamlandi.
+robocopy "." "%TEMP_DEPLOY_DIR%" /MIR /XD .git node_modules dist /XF workflow.png .env .env.local .env.development .env.production .env.test >nul
+set "ROBOCOPY_EXIT=%ERRORLEVEL%"
+if %ROBOCOPY_EXIT% GEQ 8 goto :cleanup_fail
+
+pushd "%TEMP_DEPLOY_DIR%"
+git init >nul
+if errorlevel 1 goto :cleanup_fail
+git checkout -b main >nul
+if errorlevel 1 goto :cleanup_fail
+git add .
+if errorlevel 1 goto :cleanup_fail
+git -c user.name="HF Deploy Bot" -c user.email="hf-deploy-bot@local.invalid" commit -m "Deploy snapshot from source repo" >nul
+if errorlevel 1 goto :cleanup_fail
+
+if /I "%DRY_RUN%"=="1" (
+  echo [6/6] Dry run aktif. Snapshot olusturuldu, push atlandi.
+  echo Push target: %SPACE_REMOTE_URL%
+  popd
+  goto :cleanup_success
+)
+
+echo [6/6] Hugging Face Space'e push yapiliyor...
+echo Bu islem workflow.png gibi deploy-disisi dosyalari hariç tutulan tek bir snapshot commit push eder.
+git push --force %PUSH_TARGET% main
+if errorlevel 1 goto :cleanup_fail
+
+popd
+goto :cleanup_success
+
+:cleanup_success
+if exist "%TEMP_DEPLOY_DIR%" rmdir /s /q "%TEMP_DEPLOY_DIR%"
 goto :success
 
 :missing_git
@@ -113,6 +138,14 @@ echo   2. veya bu scripti ^`HF_TOKEN=... deploy-hf-space.bat^` ile calistirin
 goto :exit_fail
 
 :fail
+echo [HATA] Deploy akisi basarisiz oldu.
+goto :exit_fail
+
+:cleanup_fail
+if exist "%TEMP_DEPLOY_DIR%" (
+  popd
+  rmdir /s /q "%TEMP_DEPLOY_DIR%"
+)
 echo [HATA] Deploy akisi basarisiz oldu.
 goto :exit_fail
 
