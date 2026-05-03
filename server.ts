@@ -106,6 +106,28 @@ function createLlmRateLimiter(maxRequests: number, windowMs: number) {
   };
 }
 
+function isSpendCapError(message: string) {
+  const lowerCaseMessage = message.toLowerCase();
+
+  return (
+    lowerCaseMessage.includes('monthly spending cap') ||
+    lowerCaseMessage.includes('spending cap') ||
+    lowerCaseMessage.includes('ai.studio/spend')
+  );
+}
+
+function isQuotaOrRateLimitError(message: string) {
+  const lowerCaseMessage = message.toLowerCase();
+
+  return (
+    message.includes('429') ||
+    message.includes('RESOURCE_EXHAUSTED') ||
+    lowerCaseMessage.includes('quota') ||
+    lowerCaseMessage.includes('rate limit') ||
+    lowerCaseMessage.includes('limit')
+  );
+}
+
 function normalizeLlmError(error: unknown) {
   const errorMessage = error instanceof Error ? error.message : String(error);
   const lowerCaseMessage = errorMessage.toLowerCase();
@@ -119,7 +141,16 @@ function normalizeLlmError(error: unknown) {
     };
   }
 
-  if (errorMessage.includes('429') || lowerCaseMessage.includes('quota') || lowerCaseMessage.includes('limit')) {
+  if (isSpendCapError(errorMessage)) {
+    return {
+      status: 429,
+      code: 'LLM_QUOTA' as const,
+      message: 'LLM proje harcama limiti aşıldı.',
+      details: errorMessage,
+    };
+  }
+
+  if (isQuotaOrRateLimitError(errorMessage)) {
     return {
       status: 429,
       code: 'LLM_QUOTA' as const,
@@ -144,6 +175,49 @@ function getAiClient(): GoogleGenAI {
   return new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 }
 
+function getImageGenerationWarning(error: unknown) {
+  const errorMessage = error instanceof Error ? error.message : String(error);
+
+  if (isSpendCapError(errorMessage)) {
+    return 'Gorsel uretim modeli proje harcama limiti nedeniyle su anda kullanilamiyor. Gorsel promptu yine de uretilecek, ancak otomatik gorsel render atlanacak.';
+  }
+
+  if (errorMessage.includes('403') || errorMessage.includes('PERMISSION_DENIED')) {
+    return 'Gorsel uretim modeli icin yetki bulunamadi. Gorsel promptu yine de uretilecek, ancak otomatik gorsel render atlanacak.';
+  }
+
+  if (isQuotaOrRateLimitError(errorMessage)) {
+    return 'Gorsel uretim modeli kota veya hiz limiti nedeniyle su anda kullanilamiyor. Gorsel promptu yine de uretilecek, ancak otomatik gorsel render atlanacak.';
+  }
+
+  return 'Gorsel uretim modeli baglanti kontrolunde yanit vermedi. Gorsel promptu yine de uretilecek, ancak otomatik gorsel render atlanacak.';
+}
+
+async function checkImageGenerationWithGemini(ai: GoogleGenAI): Promise<string | null> {
+  try {
+    const response = await ai.models.generateContent({
+      model: AI_MODELS.IMAGE_GENERATION,
+      contents: 'Create a plain neutral placeholder image for a system health check.',
+      config: {
+        imageConfig: {
+          aspectRatio: '16:9',
+        },
+      },
+    });
+
+    const parts = response.candidates?.[0]?.content?.parts;
+    const hasInlineImage = parts?.some((part) => Boolean(part.inlineData));
+
+    if (hasInlineImage) {
+      return null;
+    }
+
+    return 'Gorsel uretim modeli erisilebilir gorunuyor, ancak beklenen image verisini dondurmedi. Gorsel promptu yine de uretilecek, ancak otomatik gorsel render atlanacak.';
+  } catch (error) {
+    return getImageGenerationWarning(error);
+  }
+}
+
 async function checkSourceConnectionWithGemini() {
   const ai = getAiClient();
 
@@ -157,38 +231,32 @@ async function checkSourceConnectionWithGemini() {
       throw new Error('API base layers unreachable.');
     }
 
-    const searchCheck = await ai.models.generateContent({
-      model: AI_MODELS.TEXT_GENERATION,
-      contents: 'CURRENT_TIME_AND_DATE_IN_UTC',
-      config: {
-        tools: [{ googleSearch: {} }],
-      },
-    });
+    const imageGenerationWarning = await checkImageGenerationWithGemini(ai);
 
-    if (searchCheck) {
-      return {
-        status: 'connected' as const,
-        service: 'YouTube Search Service',
-        message: 'YouTube/Google veri kanalları açık. Sistem operasyona hazır.',
-      };
-    }
-
-    throw new Error('No response from AI service components');
+    return {
+      status: 'connected' as const,
+      service: 'Gemini Core Service',
+      message: 'Gemini temel baglantisi acik. Sistem operasyona hazir.',
+      imageGenerationAvailable: !imageGenerationWarning,
+      ...(imageGenerationWarning ? { warnings: [imageGenerationWarning] } : {}),
+    };
   } catch (error) {
     const errorMsg = error instanceof Error ? error.message : String(error);
     let userSuggestion = 'Lütfen 5-10 dakika sonra tekrar deneyin.';
 
-    if (errorMsg.includes('403') || errorMsg.includes('PERMISSION_DENIED')) {
-      userSuggestion = "API KEY YETKİ HATASI: Gemini API anahtarınızın 'Google Search' (Arama) yetkisi kapalı. Lütfen Google AI Studio -> API Key -> Search Tool ayarlarını kontrol edin.";
-    } else if (errorMsg.includes('quota') || errorMsg.includes('429') || errorMsg.includes('limit')) {
-      userSuggestion = 'KOTA SINIRI: Kullanım limitine takıldınız. Lütfen 30 dakika bekleyiniz.';
+    if (isSpendCapError(errorMsg)) {
+      userSuggestion = 'HARCAMA LİMİTİ AŞILDI: Projeniz Gemini API için aylık harcama sınırını doldurmuş. Bu durum 30 dakika bekleyerek çözülmez. https://ai.studio/spend adresinden spend cap ayarını yükseltin veya yeni faturalama dönemini bekleyin.';
+    } else if (errorMsg.includes('403') || errorMsg.includes('PERMISSION_DENIED')) {
+      userSuggestion = 'API KEY YETKİ HATASI: Gemini API anahtarınız geçersiz, pasif veya ilgili modele erişim izni olmayan bir projeye ait olabilir. Anahtarınızı ve proje erişimini kontrol edin.';
+    } else if (isQuotaOrRateLimitError(errorMsg)) {
+      userSuggestion = 'KOTA/HIZ SINIRI: Bu hata aylık spend cap anlamına gelmez. Free tier veya mevcut plan için istek kotası ya da hız limiti aşıldı. https://ai.google.dev/gemini-api/docs/rate-limits ve https://ai.dev/rate-limit adreslerinden kullanımınızı kontrol edin; kısa süre sonra tekrar deneyin veya daha düşük sıklıkta istek gönderin.';
     } else if (errorMsg.includes('network') || errorMsg.includes('connection')) {
       userSuggestion = 'AĞ HATASI: İnternet veya backend servislerine ulaşılamıyor. Lokasyonunuzdaki filtreleri kontrol edin.';
     }
 
     return {
       status: 'error' as const,
-      service: 'YouTube Search Service',
+      service: 'Gemini Core Service',
       message: `Bağlantı Katmanı Hatası: ${errorMsg}. ${userSuggestion}`,
     };
   }

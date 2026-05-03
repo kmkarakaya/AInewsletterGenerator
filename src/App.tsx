@@ -25,6 +25,8 @@ import Markdown from "react-markdown";
 import { generateNewsletter, searchSources, generateImage, checkSourceConnection, NewsletterResult, VideoSource, ApiConnectionStatus, fetchTranscriptData } from "./services/geminiService";
 import { AI_MODELS } from "./config";
 
+type LogType = 'info' | 'success' | 'error' | 'step' | 'warning';
+
 export default function App() {
   const [loading, setLoading] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<ApiConnectionStatus | null>(null);
@@ -39,7 +41,7 @@ export default function App() {
   const [analyzingCommonTopics, setAnalyzingCommonTopics] = useState(false);
   const [channels, setChannels] = useState<string[]>(["@muratkarakayaakademi", "@matthew_berman", "@code (Wes Roth)", "@SkillLeapAI", "@OpenAI", "@1littlecoder"]);
   const [newChannel, setNewChannel] = useState("");
-  const [logs, setLogs] = useState<{ message: string; type: 'info' | 'success' | 'error' | 'step' }[]>([]);
+  const [logs, setLogs] = useState<{ message: string; type: LogType }[]>([]);
   const [progress, setProgress] = useState(0);
   const [subStatus, setSubStatus] = useState("");
 
@@ -47,7 +49,7 @@ export default function App() {
 
   const newsletterRef = useRef<HTMLDivElement>(null);
 
-  const addLog = (message: string, type: 'info' | 'success' | 'error' | 'step' = 'info') => {
+  const addLog = (message: string, type: LogType = 'info') => {
     setLogs(prev => [...prev, { message, type }]);
   };
 
@@ -80,24 +82,28 @@ export default function App() {
         addLog("[OK] Bülten metni ve dinamik görsel promptu başarıyla oluşturuldu.", "success");
         
         // Start generating image automatically with the new prompt
-        addLog("YENİ METNE UYGUN BÜLTEN GÖRSELİ OLUŞTURULUYOR...", "step");
-        setImageLoading(true);
-        try {
-          const imageUrl = await generateImage(data.imagePrompt);
-          if (imageUrl) {
-            setResult(prev => {
-              if (!prev) return null;
-              const prevUrls = prev.imageUrls || (prev.imageUrl ? [prev.imageUrl] : []);
-              return { ...prev, imageUrl: imageUrl, imageUrls: [imageUrl, ...prevUrls] };
-            });
-            addLog("[OK] İnfografik görseli başarıyla oluşturuldu.", "success");
-          } else {
-            addLog("[UYARI] Görsel üretilemedi (Görsel servisi yanıt vermedi).", "info");
+        if (connectionStatus?.imageGenerationAvailable === false) {
+          addLog("[UYARI] Görsel promptu güncellendi, ancak başlangıç kontrolüne göre görsel modeli şu anda kullanılamıyor. Otomatik görsel üretimi atlandı.", "warning");
+        } else {
+          addLog("YENİ METNE UYGUN BÜLTEN GÖRSELİ OLUŞTURULUYOR...", "step");
+          setImageLoading(true);
+          try {
+            const imageUrl = await generateImage(data.imagePrompt);
+            if (imageUrl) {
+              setResult(prev => {
+                if (!prev) return null;
+                const prevUrls = prev.imageUrls || (prev.imageUrl ? [prev.imageUrl] : []);
+                return { ...prev, imageUrl: imageUrl, imageUrls: [imageUrl, ...prevUrls] };
+              });
+              addLog("[OK] İnfografik görseli başarıyla oluşturuldu.", "success");
+            } else {
+              addLog("[UYARI] Görsel üretilemedi (Görsel servisi yanıt vermedi).", "warning");
+            }
+          } catch (imgErr) {
+            addLog(`[HATA] Görsel servisi hatası: ${String(imgErr)}`, "error");
+          } finally {
+            setImageLoading(false);
           }
-        } catch (imgErr) {
-          addLog(`[HATA] Görsel servisi hatası: ${String(imgErr)}`, "error");
-        } finally {
-          setImageLoading(false);
         }
       } else {
         addLog("[UYARI] Bülten metni üretilemedi.", "error");
@@ -124,7 +130,7 @@ export default function App() {
         });
         addLog("[OK] İnfografik görseli başarıyla yeniden oluşturuldu.", "success");
       } else {
-        addLog("[UYARI] Görsel üretilemedi (Görsel servisi yanıt vermedi).", "info");
+        addLog("[UYARI] Görsel üretilemedi (Görsel servisi yanıt vermedi).", "warning");
       }
     } catch (imgErr) {
       const imgErrMsg = imgErr instanceof Error ? imgErr.message : String(imgErr);
@@ -154,9 +160,6 @@ export default function App() {
       addLog(`[PHASE_1] ${AI_MODELS.TEXT_GENERATION} temel bağlantısı test ediliyor...`);
       setProgress(3);
       await politeDelay(500);
-
-      addLog("[PHASE_2] Google Search Tool protokol erişimi sorgulanıyor...");
-      setProgress(7);
       
       const connection = await checkSourceConnection();
       setConnectionStatus(connection);
@@ -168,7 +171,9 @@ export default function App() {
         setLoading(false);
         return;
       }
+
       addLog(`[OK] ${connection.message}`, "success");
+  connection.warnings?.forEach((warning) => addLog(`[UYARI] ${warning}`, "warning"));
       addLog("[BİLGİ] Tüm arama ve analiz modülleri senkronize edildi.");
       setSubStatus("Sistem doğrulandı. Hedef kanallar taranıyor...");
       setProgress(15);
@@ -291,22 +296,26 @@ export default function App() {
 
       // Step 5: Visual
       if (data.sourcesFound && data.imagePrompt) {
-        addLog("TEKNİK İNFOGRAFİK TASARLANIYOR...", "step");
-        setSubStatus("Yapay zeka bülten için teknik infographic üretiyor...");
-        setImageLoading(true);
-        try {
-          const imageUrl = await generateImage(data.imagePrompt);
-          if (imageUrl) {
-            setResult(prev => prev ? { ...prev, imageUrl: imageUrl || undefined, imageUrls: [imageUrl] } : null);
-            addLog("[OK] İnfografik görseli başarıyla oluşturuldu.", "success");
-          } else {
-            addLog("[UYARI] Görsel üretilemedi (Görsel servisi yanıt vermedi).", "info");
+        if (connection.imageGenerationAvailable === false) {
+          addLog("[UYARI] Görsel promptu üretildi, ancak başlangıç kontrolüne göre görsel modeli şu anda kullanılamıyor. Otomatik görsel üretimi atlandı.", "warning");
+        } else {
+          addLog("TEKNİK İNFOGRAFİK TASARLANIYOR...", "step");
+          setSubStatus("Yapay zeka bülten için teknik infographic üretiyor...");
+          setImageLoading(true);
+          try {
+            const imageUrl = await generateImage(data.imagePrompt);
+            if (imageUrl) {
+              setResult(prev => prev ? { ...prev, imageUrl: imageUrl || undefined, imageUrls: [imageUrl] } : null);
+              addLog("[OK] İnfografik görseli başarıyla oluşturuldu.", "success");
+            } else {
+              addLog("[UYARI] Görsel üretilemedi (Görsel servisi yanıt vermedi).", "warning");
+            }
+          } catch (imgErr) {
+            const imgErrMsg = imgErr instanceof Error ? imgErr.message : String(imgErr);
+            addLog(`[HATA] Görsel üretilemedi: ${imgErrMsg}`, "error");
+          } finally {
+            setImageLoading(false);
           }
-        } catch (imgErr) {
-          const imgErrMsg = imgErr instanceof Error ? imgErr.message : String(imgErr);
-          addLog(`[HATA] Görsel üretilemedi: ${imgErrMsg}`, "error");
-        } finally {
-          setImageLoading(false);
         }
       }
       
@@ -323,12 +332,6 @@ export default function App() {
         addLog("Lütfen 30-60 dakika bekledikten sonra tekrar deneyiniz.", "info");
         setSubStatus("KOTA AŞILDI: Lütfen daha sonra deneyin.");
         setError("YouTube kullanım limitleri aşıldı. Lütfen bir süre bekleyip tekrar deneyin.");
-      } else if (errorMsg.includes("GOOGLE_SEARCH_PERMISSION_DENIED")) {
-        addLog("!!!! YETKİLENDİRME HATASI !!!!", "error");
-        addLog("API anahtarınızın 'Google Search' aracı kullanma yetkisi bulunmuyor.", "error");
-        addLog("Lütfen Google AI Studio üzerinden anahtar yetkilerini kontrol edin.", "info");
-        setSubStatus("YETKİ HATASI: API ayarlarını kontrol edin.");
-        setError("API Anahtarı Yetki Hatası (Google Search Aracı Pasif).");
       } else {
         addLog(`Sistem hatası: ${errorMsg}`, "error");
         setSubStatus("Sistem hatası!");
@@ -344,8 +347,8 @@ export default function App() {
   const addChannel = () => {
     if (newChannel && !channels.includes(newChannel)) {
       setChannels([...channels, newChannel]);
+      addLog(`[LİSTE] Yeni kanal eklendi: ${newChannel}`, "info");
       setNewChannel("");
-      addLog(`[LİSTE] Yeni kanal eklendi: ${newChannel}`, "success");
     }
   };
 
@@ -580,11 +583,12 @@ export default function App() {
                               leading-relaxed py-0.5
                               ${log.type === 'step' ? "text-brand-accent font-black mt-6 mb-2 border-l-4 border-brand-accent pl-3 bg-brand-accent/5 tracking-tight" : ""}
                               ${log.type === 'success' ? "text-[#00ff9d] drop-shadow-[0_0_2px_rgba(0,255,157,0.3)]" : ""}
+                              ${log.type === 'warning' ? "text-[#ffb703] bg-[#ffb703]/10 px-3 py-2 border-l-4 border-[#ffb703] font-black tracking-wide uppercase shadow-[0_0_14px_rgba(255,183,3,0.15)]" : ""}
                               ${log.type === 'error' ? "text-red-400 bg-red-400/5 px-2 py-1 border-r-2 border-red-500 font-bold" : ""}
                               ${log.type === 'info' ? "text-brand-dim/80 pl-4 border-l border-brand-line/30 italic" : ""}
                             `}
                           >
-                            {log.type === 'step' ? "[PHASE] " : log.type === 'info' ? "↳ " : "  "}
+                            {log.type === 'step' ? "[PHASE] " : log.type === 'info' ? "↳ " : log.type === 'warning' ? "[UYARI] " : "  "}
                             {log.message}
                           </motion.div>
                         ))}
@@ -954,9 +958,26 @@ export default function App() {
                     {!imageLoading && !(result.imageUrls?.length || result.imageUrl) && (
                       <div className="relative group overflow-hidden border border-brand-line bg-black flex flex-col">
                         <div className="aspect-video relative overflow-hidden bg-brand-surface/50">
-                          <div className="absolute inset-0 flex items-center justify-center text-brand-dim/30">
-                            <ImageIcon size={48} strokeWidth={1} />
-                          </div>
+                          {connectionStatus?.imageGenerationAvailable === false ? (
+                            <div className="absolute inset-0 flex flex-col items-center justify-center gap-4 px-8 text-center">
+                              <div className="flex items-center gap-3 border border-[#ffb703]/40 bg-[#ffb703]/10 px-4 py-2 text-[#ffb703] shadow-[0_0_20px_rgba(255,183,3,0.12)]">
+                                <AlertCircle size={18} strokeWidth={2.2} />
+                                <span className="font-mono text-[10px] font-black uppercase tracking-[0.24em]">
+                                  GORSEL MODEL UYARISI
+                                </span>
+                              </div>
+                              <p className="max-w-md font-mono text-[11px] uppercase tracking-[0.14em] leading-relaxed text-[#ffe29a]">
+                                GORSEL PROMPTU HAZIR. ANCAK BASLANGIC KONTROLUNE GORE GORSEL URETIM MODELI SU ANDA KULLANILAMIYOR.
+                              </p>
+                              <p className="max-w-lg font-mono text-[10px] uppercase tracking-[0.12em] leading-relaxed text-brand-dim">
+                                {connectionStatus.warnings?.[0] || "KOTA, YETKI VEYA BAGLANTI SINIRI NEDENIYLE OTOMATIK GORSEL RENDER ATLADI. DAHA SONRA YENIDEN OLUSTUR ILE TEKRAR DENEYEBILIRSIN."}
+                              </p>
+                            </div>
+                          ) : (
+                            <div className="absolute inset-0 flex items-center justify-center text-brand-dim/30">
+                              <ImageIcon size={48} strokeWidth={1} />
+                            </div>
+                          )}
                         </div>
                       </div>
                     )}

@@ -13,6 +13,8 @@ export interface ApiConnectionStatus {
   status: 'connected' | 'error';
   service: string;
   message: string;
+  warnings?: string[];
+  imageGenerationAvailable?: boolean;
 }
 
 export interface NewsletterResult {
@@ -52,7 +54,7 @@ export const checkSourceConnection = async (): Promise<ApiConnectionStatus> => {
     const errorMsg = error instanceof Error ? error.message : String(error);
     return {
       status: 'error',
-      service: 'YouTube Search Service',
+      service: 'Gemini Core Service',
       message: `Bağlantı Katmanı Hatası: ${errorMsg}. Lütfen 5-10 dakika sonra tekrar deneyin.`,
     };
   }
