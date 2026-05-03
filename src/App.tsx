@@ -23,6 +23,7 @@ import {
 import { motion, AnimatePresence } from "motion/react";
 import Markdown from "react-markdown";
 import { generateNewsletter, searchSources, generateImage, checkSourceConnection, NewsletterResult, VideoSource, ApiConnectionStatus, fetchTranscriptData } from "./services/geminiService";
+import { AI_MODELS } from "./config";
 
 export default function App() {
   const [loading, setLoading] = useState(false);
@@ -36,7 +37,7 @@ export default function App() {
   const [currentSourceProgress, setCurrentSourceProgress] = useState<VideoSource | null>(null);
   const [processedSources, setProcessedSources] = useState<VideoSource[]>([]);
   const [analyzingCommonTopics, setAnalyzingCommonTopics] = useState(false);
-  const [channels, setChannels] = useState<string[]>(["@matthew_berman", "@code (Wes Roth)", "@SkillLeapAI", "@OpenAI", "@1littlecoder"]);
+  const [channels, setChannels] = useState<string[]>(["@muratkarakayaakademi", "@matthew_berman", "@code (Wes Roth)", "@SkillLeapAI", "@OpenAI", "@1littlecoder"]);
   const [newChannel, setNewChannel] = useState("");
   const [logs, setLogs] = useState<{ message: string; type: 'info' | 'success' | 'error' | 'step' }[]>([]);
   const [progress, setProgress] = useState(0);
@@ -150,7 +151,7 @@ export default function App() {
       addLog("SİSTEM BAŞLATILIYOR...", "step");
       setSubStatus("Güvenlik ve API katmanları doğrulanıyor...");
       
-      addLog("[PHASE_1] Gemini API temel bağlantısı test ediliyor...");
+      addLog(`[PHASE_1] ${AI_MODELS.TEXT_GENERATION} temel bağlantısı test ediliyor...`);
       setProgress(3);
       await politeDelay(500);
 
@@ -243,7 +244,9 @@ export default function App() {
         
         let transcriptText = "";
         if (source.videoId) {
-           transcriptText = await fetchTranscriptData(source.videoId, source.url);
+           transcriptText = await fetchTranscriptData(source.videoId, source.url, (msg) => {
+             addLog(msg, msg.includes('[BAŞARILI]') ? 'success' : msg.includes('[HATA]') ? 'error' : 'info');
+           });
         }
         
         const status = transcriptText.length > 50 ? 'success' : 'failed';
@@ -362,11 +365,12 @@ export default function App() {
   };
 
   return (
-    <div className="min-h-screen bg-brand-bg text-brand-text font-sans selection:bg-brand-accent selection:text-black relative">
+    <div className="min-h-screen bg-brand-bg text-brand-text font-sans selection:bg-brand-accent selection:text-black relative overflow-hidden">
       <div className="grid-bg absolute inset-0 opacity-20 pointer-events-none z-0" />
+      <div className="scanline z-50 pointer-events-none" />
 
-      <div className="relative z-10 flex flex-col min-h-screen border-x border-brand-line max-w-[1440px] mx-auto">
-        {/* Header */}
+      <div className="relative z-10 flex flex-col min-h-screen border-x border-brand-line max-w-[1440px] mx-auto bg-brand-bg/40 backdrop-blur-3xl shadow-[0_0_100px_rgba(0,0,0,1)]">
+        {/* 1. Header & Hero Section */}
         <header className="p-10 md:p-14 border-b border-brand-line flex flex-col md:flex-row md:items-end justify-between gap-10">
           <div className="space-y-4">
             <div className="text-brand-accent font-mono text-xs tracking-[0.3em] uppercase">
@@ -402,23 +406,42 @@ export default function App() {
                 }
               })()}
             </div>
-            <button
-              onClick={handleGenerate}
-              disabled={loading}
-              className={`
-                mt-6 px-10 py-4 font-mono text-xs font-bold tracking-widest uppercase border transition-all duration-300
-                ${loading 
-                  ? "bg-brand-surface text-brand-dim border-brand-line cursor-wait" 
-                  : "bg-brand-accent text-black border-brand-accent hover:bg-black hover:text-brand-accent active:scale-95 shadow-[0_0_20px_rgba(0,255,157,0.2)]"}
-              `}
-            >
-              {loading ? "SİSTEM MEŞGUL..." : "BÜLTENİ OLUŞTUR"}
-            </button>
           </div>
         </header>
 
-        {/* Channel Management Section */}
-        <section className="p-10 md:p-14 border-b border-brand-line bg-black/40">
+        {/* 2. About & Usage Section */}
+        {!result && !loading && (
+          <section className="p-10 md:p-14 border-b border-brand-line bg-brand-surface/10">
+            <div className="max-w-4xl space-y-12">
+              <div className="space-y-6">
+                <h2 className="text-3xl md:text-4xl font-light text-brand-accent leading-tight tracking-tight">
+                  Otomatik Bülten Üretim Sistemine Hoş Geldiniz
+                </h2>
+                <p className="text-lg md:text-xl text-brand-dim leading-relaxed font-light">
+                  Bu uygulamanın amacı, belirlediğiniz teknik YouTube kanallarının son bir haftada yayınladığı en popüler videoları analiz ederek <strong className="text-brand-text font-normal">hemen paylaşıma hazır, yapay zeka destekli profesyonel bir LinkedIn bülteni ve görsel infografik</strong> oluşturmaktır. Belirtilen kanallardaki en sıcak gelişmeleri tarar ve size özel bir derleme sunar.
+                </p>
+              </div>
+              
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-8">
+                <div className="space-y-4">
+                  <div className="font-mono text-brand-accent text-xs">01 // KAYNAK SEÇİMİ</div>
+                  <p className="text-xs text-brand-dim leading-relaxed uppercase tracking-wider">Takip etmek istediğiniz YouTube kanallarını aşağıdan belirleyin.</p>
+                </div>
+                <div className="space-y-4">
+                  <div className="font-mono text-brand-accent text-xs">02 // OTONOM ANALİZ</div>
+                  <p className="text-xs text-brand-dim leading-relaxed uppercase tracking-wider">Sistem videoları bulur, transkriptleri okur, bülteni sentezler ve içeriğe uygun infografik üretir.</p>
+                </div>
+                <div className="space-y-4">
+                  <div className="font-mono text-brand-accent text-xs">03 // REVİZYON & PAYLAŞIM</div>
+                  <p className="text-xs text-brand-dim leading-relaxed uppercase tracking-wider">Sonucu inceleyin, metni veya görseli isterseniz revize edin ve LinkedIn'de paylaşın.</p>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* 3. Channel Management Section */}
+        <section className="p-10 md:p-14 border-b border-brand-line bg-black/20">
           <div className="max-w-4xl space-y-8">
             <div className="flex items-center gap-4">
               <Database size={18} className="text-brand-accent" />
@@ -467,10 +490,40 @@ export default function App() {
             
             <p className="font-mono text-[10px] text-brand-dim uppercase tracking-wider leading-relaxed bg-brand-accent/5 p-4 border-l-2 border-brand-accent">
               * Yazılım SADECE bu listedeki kanalları son 7 gün içindeki en çok izlenen teknik videoları için tarar.
-              Farklı bir kanaldan veri çekilmesi protokol gereği engellenmiştir.
             </p>
           </div>
         </section>
+
+        {/* 4. Generation Controls Section */}
+        {!result && (
+          <section className="p-10 md:p-14 border-b border-brand-line bg-brand-accent/5">
+            <div className="flex flex-col md:flex-row items-center justify-between gap-10">
+              <div className="space-y-2 max-w-xl">
+                <h3 className="font-mono text-xs font-black text-brand-accent uppercase tracking-widest">SİSTEMİ BAŞLATIN</h3>
+                <p className="text-sm text-brand-dim font-light leading-relaxed">
+                  Ayarlarınızı kontrol ettiyseniz bülten üretim sürecini başlatmak için sağdaki butona tıklayın. Sistem yaklaşık 1-2 dakika içinde bülteni hazırlayacaktır.
+                </p>
+              </div>
+              <button
+                onClick={handleGenerate}
+                disabled={loading}
+                className={`
+                  w-full md:w-auto px-16 py-6 font-mono text-sm font-black tracking-[0.2em] uppercase border transition-all duration-300
+                  ${loading 
+                    ? "bg-brand-surface text-brand-dim border-brand-line cursor-wait" 
+                    : "bg-brand-accent text-black border-brand-accent hover:bg-black hover:text-brand-accent active:scale-95 shadow-[0_0_40px_rgba(0,255,157,0.3)]"}
+                `}
+              >
+                {loading ? (
+                  <div className="flex items-center gap-4">
+                    <RefreshCw size={20} className="animate-spin" /> İŞLEM YAPILIYOR...
+                  </div>
+                ) : "BÜLTENİ OLUŞTURMAYA BAŞLA"}
+              </button>
+            </div>
+          </section>
+        )}
+
 
         {/* Main Content Areas */}
         <main className="flex-1 grid grid-cols-1 lg:grid-cols-[1.5fr_1fr] border-b border-brand-line">
@@ -504,31 +557,43 @@ export default function App() {
                   </div>
 
                   <div className="grid grid-cols-1 lg:grid-cols-2 gap-8 flex-1 overflow-hidden min-h-[400px]">
-                    {/* Log Terminal */}
-                    <div className="flex flex-col h-full bg-black/40 border border-brand-line px-6 py-4 font-mono text-[10px] space-y-2 overflow-y-auto max-h-[400px] scrollbar-hide relative">
-                      <div className="text-brand-dim pb-2 border-b border-brand-line/30 mb-2 uppercase tracking-widest flex items-center gap-2 sticky top-0 bg-brand-bg/80 backdrop-blur-sm z-10 w-full">
-                        <Terminal size={12} /> PROCESS_LOGS
+                      {/* Log Terminal */}
+                    <div className="flex flex-col h-full bg-black/60 border border-brand-line/50 px-6 py-5 font-mono text-[11px] space-y-3 overflow-y-auto max-h-[500px] scrollbar-hide relative group">
+                      <div className="text-brand-accent pb-3 border-b border-brand-line/30 mb-2 uppercase tracking-[0.3em] font-black flex items-center justify-between sticky top-0 bg-brand-bg/95 backdrop-blur-md z-20 w-full">
+                        <div className="flex items-center gap-3">
+                          <Terminal size={14} className="text-brand-accent rotate-[-5deg]" /> 
+                          <span>PROCESS_ANALYSIS_LOGS_v3.1</span>
+                        </div>
+                        <div className="flex gap-1">
+                          <div className="w-2 h-2 rounded-full bg-red-900 shadow-[0_0_5px_red]" />
+                          <div className="w-2 h-2 rounded-full bg-yellow-900" />
+                          <div className="w-2 h-2 rounded-full bg-green-900 shadow-[0_0_5px_#00ff9d]" />
+                        </div>
                       </div>
-                      <div className="flex-1">
+                      <div className="flex-1 space-y-1">
                         {logs.map((log, i) => (
                           <motion.div 
                             key={i}
-                            initial={{ opacity: 0, x: -5 }}
+                            initial={{ opacity: 0, x: -10 }}
                             animate={{ opacity: 1, x: 0 }}
                             className={`
-                              leading-relaxed
-                              ${log.type === 'step' ? "text-brand-accent font-bold mt-4 border-l-2 border-brand-accent pl-2" : ""}
-                              ${log.type === 'success' ? "text-brand-accent" : ""}
-                              ${log.type === 'error' ? "text-red-500" : ""}
-                              ${log.type === 'info' ? "text-brand-dim pl-4" : ""}
+                              leading-relaxed py-0.5
+                              ${log.type === 'step' ? "text-brand-accent font-black mt-6 mb-2 border-l-4 border-brand-accent pl-3 bg-brand-accent/5 tracking-tight" : ""}
+                              ${log.type === 'success' ? "text-[#00ff9d] drop-shadow-[0_0_2px_rgba(0,255,157,0.3)]" : ""}
+                              ${log.type === 'error' ? "text-red-400 bg-red-400/5 px-2 py-1 border-r-2 border-red-500 font-bold" : ""}
+                              ${log.type === 'info' ? "text-brand-dim/80 pl-4 border-l border-brand-line/30 italic" : ""}
                             `}
                           >
-                            {log.type === 'step' ? ">> " : "   "}
+                            {log.type === 'step' ? "[PHASE] " : log.type === 'info' ? "↳ " : "  "}
                             {log.message}
                           </motion.div>
                         ))}
                       </div>
-                      <div className="animate-pulse text-brand-accent mt-2">_</div>
+                      <div className="flex items-center gap-2 text-brand-accent mt-4 font-black">
+                        <span className="animate-ping inline-block w-1.5 h-1.5 rounded-full bg-brand-accent" />
+                        <span>SİSTEM_BEKLEMEDE...</span>
+                        <span className="animate-pulse">_</span>
+                      </div>
                     </div>
 
                     {/* Visual Progress */}
@@ -807,32 +872,12 @@ export default function App() {
                   className="space-y-12"
                 >
                   <div className="space-y-6">
-                    <h2 className="text-2xl md:text-3xl font-light text-brand-accent leading-tight tracking-tight">
-                      Otomatik Bülten Üretim Sistemine Hoş Geldiniz
+                    <h2 className="text-xl md:text-2xl font-mono text-brand-accent/50 uppercase tracking-widest flex items-center gap-4">
+                      <Terminal size={16} /> BEKLEMEDE_SİSTEM
                     </h2>
-                    <p className="text-base md:text-lg text-brand-dim leading-relaxed font-light">
-                      Bu uygulamanın amacı, belirlediğiniz teknik YouTube kanallarının son bir haftada yayınladığı en popüler videoları analiz ederek <strong className="text-brand-text font-normal">hemen paylaşıma hazır, yapay zeka destekli profesyonel bir LinkedIn bülteni</strong> oluşturmaktır. Belirtilen kanallardaki en sıcak gelişmeleri tarar ve size özel bir derleme sunar.
+                    <p className="text-sm font-mono text-brand-dim leading-relaxed uppercase tracking-wider">
+                      Bülten oluşturma işlemini başlattığınızda loglar ve sonuçlar bu alanda görünecektir.
                     </p>
-                  </div>
-                  
-                  <div className="space-y-6 bg-brand-surface/20 border border-brand-line p-8">
-                    <h3 className="font-mono text-xs uppercase tracking-[0.2em] text-brand-accent flex items-center gap-3">
-                      <Terminal size={14} /> ADIM ADIM KULLANIM
-                    </h3>
-                    <ul className="space-y-6 font-mono text-[10px] md:text-[11px] text-brand-dim uppercase tracking-wider leading-relaxed">
-                      <li className="flex items-start gap-4">
-                        <span className="text-brand-accent mt-0.5">01 //</span>
-                        <span>Yukarıdaki <strong className="text-brand-text">"HEDEF YOUTUBE KANALLARI"</strong> bölümünden bültene dahil edilmesini istediğiniz kaynakları belirleyin veya silebilirsiniz.</span>
-                      </li>
-                      <li className="flex items-start gap-4">
-                        <span className="text-brand-accent mt-0.5">02 //</span>
-                        <span>Sağ üst köşedeki <strong className="text-brand-text">"BÜLTENİ OLUŞTUR"</strong> butonuna tıklayarak süreci başlatın. Bu işlem bağlantı hızınıza ve video sayısına göre biraz süre alabilir.</span>
-                      </li>
-                      <li className="flex items-start gap-4">
-                        <span className="text-brand-accent mt-0.5">03 //</span>
-                        <span>Sistem transkriptleri analiz edecek ve size haber metni ile infografik üretim promptunu sunacaktır. Sonuçları inceleyip dilerseniz yapay zekadan bülten metnini güncel isteklerinize göre revize etmesini isteyebilirsiniz.</span>
-                      </li>
-                    </ul>
                   </div>
                 </motion.div>
               )}
@@ -840,17 +885,8 @@ export default function App() {
           </section>
 
           {/* Right Column: Sidebar */}
-          <section className="p-10 md:p-14 bg-gradient-to-b from-brand-surface to-brand-bg flex flex-col justify-between gap-12">
+          <section className="p-10 md:p-14 bg-black/40 lg:sticky lg:top-0 lg:h-[calc(100vh-100px)] overflow-y-auto scrollbar-hide flex flex-col gap-12 border-l border-brand-line">
             <div className="space-y-12">
-              <div className="space-y-6">
-                <h3 className="font-mono text-[10px] uppercase tracking-[0.3em] text-brand-accent border-l-2 border-brand-accent pl-4">
-                  SİSTEM DURUMU
-                </h3>
-                <p className="text-sm md:text-base font-light italic leading-relaxed text-brand-dim">
-                  Yapay Zeka ve LLM dünyasındaki yenilikleri hızlı ve etkili şekilde takip edin. Bu asistan, teknik haberleri doğrudan ham kaynaklardan (YouTube transkriptleri) sentezler, manuel araştırma süresini ortadan kaldırır. 
-                </p>
-              </div>
-
               {result?.imagePrompt && (
                 <div className="space-y-6">
                   <h3 className="font-mono text-[10px] uppercase tracking-[0.3em] text-brand-accent border-l-2 border-brand-accent pl-4">
@@ -934,14 +970,6 @@ export default function App() {
                   </div>
                 </div>
               )}
-            </div>
-
-            <div className="p-8 border border-dashed border-brand-line">
-              <p className="font-mono text-[10px] uppercase leading-loose tracking-widest text-brand-dim">
-                TRANSKRİPT ANALİZİ: AKTİF<br />
-                KAYNAK KONTROLÜ: DOĞRULANDI<br />
-                TEKNİK DERİNLİK: %100
-              </p>
             </div>
           </section>
         </main>

@@ -1,4 +1,5 @@
 import { GoogleGenAI, Type } from "@google/genai";
+import { AI_MODELS } from "../config";
 
 const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
 
@@ -36,7 +37,7 @@ export const checkSourceConnection = async (): Promise<ApiConnectionStatus> => {
     // Phase 1: Basic API Connectivity
     // We send a very simple prompt to verify the API key is valid.
     const basicCheck = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: AI_MODELS.TEXT_GENERATION,
       contents: "API_REACHABILITY_PULSE_CHECK",
     });
 
@@ -45,7 +46,7 @@ export const checkSourceConnection = async (): Promise<ApiConnectionStatus> => {
     // Phase 2: Search Tool Permission Check
     // This is where most 403 errors happen. We use a real query to trigger the tool properly.
     const searchCheck = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: AI_MODELS.TEXT_GENERATION,
       contents: "CURRENT_TIME_AND_DATE_IN_UTC",
       config: { 
         tools: [{ googleSearch: {} }],
@@ -101,15 +102,25 @@ export const searchSources = async (channels: string[]): Promise<VideoSource[]> 
   }
 };
 
-export const fetchTranscriptData = async (videoId: string, url?: string): Promise<string> => {
+export const fetchTranscriptData = async (videoId: string, url?: string, onStatus?: (msg: string) => void): Promise<string> => {
   try {
-    // We bypass the flaky third-party youtube-transcript library which is blocked by YT Anti-Bot.
-    // Instead we use the Gemini's native capabilities to read the video directly.
     const videoUrl = url || `https://www.youtube.com/watch?v=${videoId}`;
-    const prompt = `Please act as a transcriber and summarize the content. Give me a highly detailed step-by-step technical extraction of what is discussed in this video: ${videoUrl}\n\nDo not invent things, rely on the tools to view the video content. Provide a long, detailed transcript summary.`;
+    
+    // Attempt 1: Gemini with Search Tool
+    onStatus?.(`[YÖNTEM 1] ${AI_MODELS.TEXT_GENERATION} + Search Tool ile transkript sentezleniyor...`);
+    const prompt = `
+      You have access to Google Search. Your task is to extract a highly detailed technical transcript or a very comprehensive summary of the content of this YouTube video: ${videoUrl}
+      
+      INSTRUCTIONS:
+      1. Use the Google Search tool to find the transcript, description, or detailed summaries of this specific video.
+      2. If you cannot find a verbatim transcript, provide a very long and detailed technical breakdown of the key points, concepts, and announcements mentioned in the video.
+      3. Your output should be at least 300 words long to ensure enough context for a newsletter.
+      4. Focus on technical details, tool names, version numbers, and architectural shifts.
+      5. Do not just say "I cannot access it". Try multiple search queries if needed to find related blog posts or documentations if it's an official announcement video (like OpenAI).
+    `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3.1-pro-preview",
+      model: AI_MODELS.TEXT_GENERATION,
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
@@ -118,14 +129,28 @@ export const fetchTranscriptData = async (videoId: string, url?: string): Promis
     });
 
     if (response.text && response.text.length > 50) {
+      onStatus?.(`[BAŞARILI] ${AI_MODELS.TEXT_GENERATION} üzerinden içerik başarıyla çekildi.`);
       return response.text;
     }
     
-    // Fallback if Gemini fails
-    return await fallbackFetchTranscript(videoId);
+    // Fallback if AI fails
+    onStatus?.(`[YÖNTEM 2] ${AI_MODELS.TEXT_GENERATION} sonuç vermedi. YouTube Proxy Katmanına (Scraper) geçiliyor...`);
+    const fallbackText = await fallbackFetchTranscript(videoId);
+    if (fallbackText) {
+      onStatus?.(`[BAŞARILI] Proxy üzerinden transkript çekildi.`);
+      return fallbackText;
+    }
+
+    onStatus?.(`[HATA] Hiçbir yöntemle transkripte ulaşılamadı.`);
+    return "";
   } catch (err) {
     console.error("Gemini Transcript fetch error:", err);
-    return await fallbackFetchTranscript(videoId);
+    onStatus?.(`[HATA] İşlem sırasında hata oluştu: ${err instanceof Error ? err.message : String(err)}. Fallback (Proxy) deneniyor...`);
+    const fallbackText = await fallbackFetchTranscript(videoId);
+    if (fallbackText) {
+      onStatus?.(`[BAŞARILI] Fallback Proxy üzerinden transkript çekildi.`);
+    }
+    return fallbackText;
   }
 };
 
@@ -220,7 +245,7 @@ export const generateNewsletter = async (sources: VideoSource[], revisionPrompt?
     `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: AI_MODELS.TEXT_GENERATION,
       contents: prompt,
       config: {
         tools: [{ googleSearch: {} }],
@@ -294,7 +319,7 @@ export const generateImagePromptForNewsletter = async (newsletterContent: string
     `;
 
     const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
+      model: AI_MODELS.TEXT_GENERATION,
       contents: prompt
     });
 
@@ -308,7 +333,7 @@ export const generateImagePromptForNewsletter = async (newsletterContent: string
 export const generateImage = async (prompt: string): Promise<string | null> => {
   try {
     const response = await ai.models.generateContent({
-      model: "gemini-2.5-flash-image",
+      model: AI_MODELS.IMAGE_GENERATION,
       contents: {
         parts: [
           { text: prompt }

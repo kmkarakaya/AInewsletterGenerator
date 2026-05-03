@@ -18,8 +18,7 @@ Bu proje, belirlenen teknik YouTube kanallarındaki en son ve popüler yapay zek
 - **Frontend:** React 19, Vite, Tailwind CSS, Lucide Icons, Framer Motion (Motion).
 - **Backend:** Node.js, Express (YouTube Proxy & Scraper Proxy).
 - **Yapay Zeka (LLM):** 
-    - `gemini-3.1-pro-preview` (Transkript analizi)
-    - `gemini-3-flash-preview` (Bülten sentezi ve Search entegrasyonu)
+    - `gemini-3.1-flash-lite` (Transkript analizi, Search entegrasyonu, Bülten sentezi)
     - `gemini-2.5-flash-image` (İnfografik üretimi)
 - **Veri Kaynakları:** YouTube Data Scraper API, Google Search Grounding.
 
