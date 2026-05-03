@@ -1,3 +1,14 @@
+---
+title: AInewsletterGenerator
+emoji: 🐳
+colorFrom: blue
+colorTo: indigo
+sdk: docker
+app_port: 3005
+pinned: false
+short_description: YouTube kaynaklarindan AI bulteni ve infografik ureten Docker Space.
+---
+
 # AInewsletterGenerator
 
 Bu repo, belirli YouTube kanallarındaki son içerikleri tarayıp teknik AI odaklı bir LinkedIn bülteni ve buna eşlik eden infografik görsel oluşturan tam yığın bir uygulamadır.
