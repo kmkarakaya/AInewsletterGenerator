@@ -666,7 +666,6 @@ async function startServer() {
         const { channels } = req.body;
         const videos: any[] = [];
         const xml2js = await import('xml2js');
-        const fetch = (await import('node-fetch')).default;
 
         for (const channel of channels) {
           try {

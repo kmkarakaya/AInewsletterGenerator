@@ -97,6 +97,11 @@ Desteklenen değişkenler:
 - `HMR_PORT`: İsteğe bağlı. Vite HMR websocket portu. Verilmezse `PORT + 1` kullanılır.
 - `DISABLE_HMR`: `true` ise HMR kapatılır.
 
+Production ve Docker notu:
+
+- Production modunda `NODE_ENV=production` olduğunda backend `dist` klasörünü statik olarak servis eder.
+- Docker/Hugging Face deploy'larında `GEMINI_API_KEY` secret olarak verilmelidir; image içine gömülmez.
+
 Not: Çalışan ortamda hem `GOOGLE_API_KEY` hem `GEMINI_API_KEY` tanımlıysa, `@google/genai` kütüphanesi `GOOGLE_API_KEY` kullanıldığına dair log üretebilir. Bu davranış kütüphane seviyesindedir.
 
 ## Çalıştırma
@@ -138,6 +143,14 @@ npm run build
 ```
 
 Bu komut sadece frontend `dist` çıktısını üretir.
+
+### Production Benzeri Çalıştırma
+
+```bash
+npm run start
+```
+
+Bu komut backend server'ı başlatır. `NODE_ENV=production` ile çalıştırıldığında `dist` klasöründeki frontend çıktısı da servis edilir.
 
 ### Tip Denetimi
 
@@ -547,6 +560,8 @@ Yanıt:
 - [src/services/geminiService.ts](src/services/geminiService.ts): Frontend API istemcileri
 - [src/config.ts](src/config.ts): Model sabitleri
 - [vite.config.ts](vite.config.ts): Vite yapılandırması ve HMR port yönetimi
+- [Dockerfile](Dockerfile): Hugging Face Docker Space ve container deploy girişi
+- [.dockerignore](.dockerignore): Container build context filtreleri
 - [.env.example](.env.example): Ortam değişkeni örneği
 
 ## Repo Yapısı
@@ -557,6 +572,8 @@ Kısa görünüm:
 .
 ├─ server.ts
 ├─ package.json
+├─ Dockerfile
+├─ .dockerignore
 ├─ tsconfig.json
 ├─ vite.config.ts
 ├─ metadata.json
@@ -626,6 +643,15 @@ Bazı log satırları kullanıcı deneyimi için bilinçli gecikme ve sahnelenmi
 
 Bu repo güvenlik açısından eski sürüme göre daha doğru yapıdadır. Gemini anahtarı artık istemci bundle içinde bulunmamalıdır.
 
+### 9. Repo Docker Space için hazırlanmıştır
+
+Repo artık minimal bir Docker deploy yüzeyi içerir.
+
+- `Dockerfile` Node 20 tabanlı image kullanır
+- Build sırasında frontend `dist` çıktısı üretilir
+- Runtime'da backend aynı container içinde frontend'i servis eder
+- Hugging Face Spaces için uygun hedef tip `Docker Space`'tir
+
 ## Sorun Giderme
 
 ### Port doluysa
@@ -641,6 +667,8 @@ npm run dev
 ### `GEMINI_API_KEY is not configured on the server` hatası
 
 `.env` dosyasını kontrol edin ve backend'in aynı çalışma dizininden başlatıldığından emin olun.
+
+Docker veya Hugging Face Spaces üzerinde çalışıyorsanız bu değeri `.env` yerine secret/env variable olarak verin.
 
 ### `IMAGE_GEN_PERMISSION` hatası
 
@@ -682,5 +710,76 @@ Bu projeyi geliştirirken doğru model şudur:
 - Revizyon modu sıfırdan üretim değil, son newsletter üzerinde kontrollü edit akışı
 
 Bu README, mevcut repo davranışını kodun şu an yaptığı haliyle belgelemek için güncellenmiştir.
+
+## Hugging Face Spaces (Docker) Deploy
+
+Bu repo en doğru şekilde `Docker Space` olarak deploy edilir.
+
+Gerekli minimum ayarlar:
+
+1. Hugging Face'te yeni bir Space oluşturun.
+2. Space tipini `Docker` seçin.
+3. Repo'yu bu Space'e bağlayın veya push edin.
+4. Space secrets içine `GEMINI_API_KEY` ekleyin.
+
+Container davranışı:
+
+- `Dockerfile` bağımlılıkları kurar
+- `npm run build` ile frontend bundle üretir
+- `npm run start` ile server'ı ayağa kaldırır
+- `NODE_ENV=production` altında backend `dist` klasörünü servis eder
+
+Yerel Docker testi örneği:
+
+```bash
+docker build -t ai-newsletter-generator .
+docker run -p 3005:3005 -e GEMINI_API_KEY=YOUR_KEY ai-newsletter-generator
+```
+
+Beklenen çalışma modeli:
+
+- Tek container içinde hem backend hem frontend servis edilir
+- Frontend `/api/*` çağrılarını aynı origin üzerinden backend'e yapar
+- Gemini anahtarı yalnızca server tarafında kullanılır
+
+### Tek Komutla Push
+
+Repo kökünde bir [deploy-hf-space.bat](deploy-hf-space.bat) scripti vardır.
+
+Amaç:
+
+- Önce `npm run build` doğrulaması yapmak
+- Sonra Docker image build testi yapmak
+- Son olarak mevcut commit'i Hugging Face Space repo'suna push etmek
+
+Normal kullanım:
+
+```bat
+deploy-hf-space.bat
+```
+
+İlk kullanım öncesi seçenekler:
+
+- Bir kez `hf auth login` çalıştırabilirsiniz
+- veya scripti `HF_TOKEN` env var ile çağırabilirsiniz
+
+Örnek:
+
+```bat
+set HF_TOKEN=hf_xxx
+deploy-hf-space.bat
+```
+
+Yardımcı bayraklar:
+
+- `DRY_RUN=1`: Push yapmadan önce tüm yerel kontrolleri çalıştırır
+- `SKIP_DOCKER_BUILD=1`: Docker build doğrulamasını atlar
+
+Örnek dry-run:
+
+```bat
+set DRY_RUN=1
+deploy-hf-space.bat
+```
 
 
