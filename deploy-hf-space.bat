@@ -42,7 +42,7 @@ if /I "%SKIP_DOCKER_BUILD%"=="1" (
 )
 
 echo [3/6] Hugging Face kimlik dogrulamasi kontrol ediliyor...
-set "PUSH_TARGET=%SPACE_REMOTE_NAME%"
+set "PUSH_TARGET=%SPACE_REMOTE_URL%"
 
 where hf >nul 2>&1
 if errorlevel 1 goto :configure_git_remote
