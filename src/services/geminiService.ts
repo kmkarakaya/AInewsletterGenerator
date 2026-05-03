@@ -47,6 +47,9 @@ export const checkSourceConnection = async (): Promise<ApiConnectionStatus> => {
     const searchCheck = await ai.models.generateContent({
       model: AI_MODELS.TEXT_GENERATION,
       contents: "CURRENT_TIME_AND_DATE_IN_UTC",
+      config: { 
+        tools: [{ googleSearch: {} }]
+      }
     });
     
     if (searchCheck) {
@@ -101,47 +104,55 @@ export const fetchTranscriptData = async (videoId: string, url?: string, onStatu
   try {
     const videoUrl = url || `https://www.youtube.com/watch?v=${videoId}`;
     
-    // Attempt 1: Gemini with Search Tool
-    onStatus?.(`[YÖNTEM 1] ${AI_MODELS.TEXT_GENERATION} + Search Tool ile transkript sentezleniyor...`);
-    const prompt = `
-      You have access to Google Search. Your task is to extract a highly detailed technical transcript or a very comprehensive summary of the content of this YouTube video: ${videoUrl}
-      
-      INSTRUCTIONS:
-      1. Use the Google Search tool to find the transcript, description, or detailed summaries of this specific video.
-      2. If you cannot find a verbatim transcript, provide a very long and detailed technical breakdown of the key points, concepts, and announcements mentioned in the video.
-      3. Your output should be at least 300 words long to ensure enough context for a newsletter.
-      4. Focus on technical details, tool names, version numbers, and architectural shifts.
-      5. Do not just say "I cannot access it". Try multiple search queries if needed to find related blog posts or documentations if it's an official announcement video (like OpenAI).
-    `;
-
-    const response = await ai.models.generateContent({
-      model: AI_MODELS.TEXT_GENERATION,
-      contents: prompt
-    });
-
-    if (response.text && response.text.length > 50) {
-      onStatus?.(`[BAŞARILI] ${AI_MODELS.TEXT_GENERATION} üzerinden içerik başarıyla çekildi.`);
-      return response.text;
-    }
+    // AŞAMA 1: Backend proxy üzerinden asıl transkripti çek (youtube-transcript vb.)
+    onStatus?.(`[AŞAMA 1] Proxy üzerinden ${videoId} videosunun ham transkripti çekiliyor...`);
+    const rawTranscript = await fallbackFetchTranscript(videoId);
     
-    // Fallback if AI fails
-    onStatus?.(`[YÖNTEM 2] ${AI_MODELS.TEXT_GENERATION} sonuç vermedi. YouTube Proxy Katmanına (Scraper) geçiliyor...`);
-    const fallbackText = await fallbackFetchTranscript(videoId);
-    if (fallbackText) {
-      onStatus?.(`[BAŞARILI] Proxy üzerinden transkript çekildi.`);
-      return fallbackText;
+    if (rawTranscript && rawTranscript.length > 50) {
+      if (rawTranscript.includes("TRANSCRIPT NOT FOUND")) {
+         onStatus?.(`[BİLGİ] Asıl transkript bulunamadı, video açıklaması (description) yönlendiriliyor.`);
+         return rawTranscript;
+      }
+
+      onStatus?.(`[AŞAMA 2] Ham transkript proxyden çekildi (${rawTranscript.length} karakter). Bültende kullanılmak üzere LLM ile özetleniyor...`);
+      
+      const prompt = `
+        Sen uzaman bir teknik analizci ve veri madencisisin.
+        Aşağıda bir YouTube videosundan çekilmiş ham transkript (altyazı dökümü) bulunmaktadır.
+        
+        GÖREV: Bu transkripti okuyup, profesyonel bir haber bülteninde kullanılmak üzere
+        videonun özünü, en önemli teknik duyurularını, yeni tanıtılan araç/versiyonları 
+        ve çözülen problemleri anlatan kapsamlı, madde madde bir teknik özet çıkarmaktır.
+        
+        ÇOK KRİTİK KURALLAR:
+        1. SADECE aşağidaki ham transkriptte olan bilgileri özetle. DIŞARIDAN, GEÇMİŞTEN VEYA GENEL KÜLTÜRDEN HİÇBİR BİLGİ UYDURMA, EKLEME (HALLUCINATION YAPMA).
+        2. Çıktıyı tamamen Türkçe ver.
+        3. Yazım tarzın profesyonel, net ve bilgi yoğun olsun.
+
+        HAM TRANSKRİPT:
+        ${rawTranscript.substring(0, 40000)}
+      `;
+
+      const response = await ai.models.generateContent({
+        model: AI_MODELS.TEXT_GENERATION,
+        contents: prompt
+      });
+
+      if (response.text && response.text.length > 50) {
+        onStatus?.(`[BAŞARILI] Transkript LLM tarafından başarıyla özetlendi ve analiz edildi.`);
+        return response.text;
+      }
+      
+      onStatus?.(`[UYARI] LLM özetlemesi boş döndü, mecbur ham veriyi aktarıyoruz.`);
+      return rawTranscript;
     }
 
-    onStatus?.(`[HATA] Hiçbir yöntemle transkripte ulaşılamadı.`);
+    onStatus?.(`[HATA] Proxy (arka plan) üzerinden transkripte ulaşılamadı.`);
     return "";
   } catch (err) {
-    console.error("Gemini Transcript fetch error:", err);
-    onStatus?.(`[HATA] İşlem sırasında hata oluştu: ${err instanceof Error ? err.message : String(err)}. Fallback (Proxy) deneniyor...`);
-    const fallbackText = await fallbackFetchTranscript(videoId);
-    if (fallbackText) {
-      onStatus?.(`[BAŞARILI] Fallback Proxy üzerinden transkript çekildi.`);
-    }
-    return fallbackText;
+    console.error("Transcript fetch & summarize error:", err);
+    onStatus?.(`[HATA] İşlem sırasında hata oluştu: ${err instanceof Error ? err.message : String(err)}`);
+    return "";
   }
 };
 
@@ -175,7 +186,7 @@ export const generateNewsletter = async (sources: VideoSource[], revisionPrompt?
     const currentDateEN = today.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
     const lastWeekEN = lastWeek.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
 
-    const sourcesContext = sources.map(s => `- ${s.title} (${s.channel}, ${s.date})\n  Transcript/Summary: ${s.transcript?.substring(0, 800) || "No transcript"}`).join("\n\n");
+    const sourcesContext = sources.map(s => `- ${s.title} (${s.channel}, ${s.date})\n  Transcript/Summary: ${s.transcript?.substring(0, 15000) || "No transcript"}`).join("\n\n");
     
     let revisionContext = "";
     if (revisionPrompt && lastContent) {
@@ -196,15 +207,19 @@ export const generateNewsletter = async (sources: VideoSource[], revisionPrompt?
       Target Period: ${lastWeekEN} - ${currentDateEN}.
       
       ANALYZING TOP ${sources.length} TRENDING VIDEOS:
+      <sources_data>
       ${sourcesContext}
+      </sources_data>
+      
       ${revisionContext}
 
       TASK:
-      1. Deeply analyze the transcripts or detailed technical summaries of ONLY these top ${sources.length} videos.
-      2. CROSS-ANALYSIS: Identify if there are common news, overlapping technical concepts, or shared announcements discussed across these transcripts. List these common topics clearly.
-      3. Focus on "The Most Impactful Shared Trends" of the week found in these sources.
-      4. Generate a LinkedIn newsletter for "Murat Karakaya Akademi" in TURKISH.
-      5. PRIORITY: If common topics exist, lead with them as the core highlight of the week. Summarize the technical essence.
+      1. Deeply analyze the <sources_data> block. This block contains transcripts or detailed technical summaries of ONLY these top ${sources.length} videos.
+      2. EXTREMELY CRITICAL ANTI-HALLUCINATION RULE: You are strictly forbidden from writing about any news, events, or technologies not explicitly detailed in the <sources_data> block. Do not bring in historical context, general knowledge, or previous news. If the text says "No transcript" or has no data, skip that video entirely. If NO video has relevant data, just output "Bu hafta herhangi bir spesifik veri kaynağı bulunamadı."
+      3. CROSS-ANALYSIS: Identify if there are common news, overlapping technical concepts, or shared announcements discussed across these transcripts. List these common topics clearly.
+      4. Focus on "The Most Impactful Shared Trends" of the week strictly found in these sources.
+      5. Generate a LinkedIn newsletter for "Murat Karakaya Akademi" in TURKISH based ONLY on the <sources_data>.
+      6. PRIORITY: If common topics exist within the <sources_data>, lead with them as the core highlight of the week. Summarize their technical essence based solely on the provided text.
       
       6. RULES:
          - Professional news agency style.

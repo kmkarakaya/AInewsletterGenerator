@@ -2,6 +2,7 @@ import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import { YoutubeTranscript } from 'youtube-transcript/dist/youtube-transcript.esm.js';
 import { getSubtitles } from 'youtube-captions-scraper';
+import ytdl from '@distube/ytdl-core';
 import yts from 'yt-search';
 import path from 'path';
 import { fileURLToPath } from 'url';
@@ -121,7 +122,7 @@ async function startServer() {
               return res.json({ text: fullText });
             }
           } catch (e) {
-            console.warn(`[UYARI] youtube-transcript başarısız (${videoId}):`, String(e));
+            console.log(`[BİLGİ] youtube-transcript başarısız (${videoId}): Transkript kapalı veya bulunamadı.`);
           }
 
           // Attempt 2: youtube-captions-scraper (Fallback 1)
@@ -133,7 +134,7 @@ async function startServer() {
               return res.json({ text: fullText });
             }
           } catch (e) {
-             console.warn(`[UYARI] youtube-captions-scraper (en) başarısız (${videoId}):`, String(e));
+             console.log(`[BİLGİ] youtube-captions-scraper (en) başarısız (${videoId}): Altyazı bulunamadı.`);
           }
 
           // Attempt 3: youtube-captions-scraper with common languages (Fallback 2)
@@ -150,7 +151,19 @@ async function startServer() {
             }
           }
 
-          res.json({ text: "", error: "Bütün transkript yöntemleri denendi ama sonuç alınamadı." });
+          // Attempt 4: distube/ytdl-core metadata fallback
+          try {
+             const info = await ytdl.getInfo(videoId);
+             const description = info.videoDetails.description;
+             if (description && description.length > 50) {
+                 console.log(`[OK] ytdl-core video açıklaması kullanıldı (${videoId})`);
+                 return res.json({ text: `TRANSCRIPT NOT FOUND. VIDEO DESCRIPTION INSTEAD:\n\n${description}` });
+             }
+          } catch (e) {
+             console.log(`[BİLGİ] ytdl-core description fallback başarısız (${videoId}).`);
+          }
+
+          res.json({ text: "", error: "Bütün transkript ve metadata yöntemleri denendi ama sonuç alınamadı." });
       } catch (err) {
           console.error("Transcript fetch error:", err);
           res.json({ text: "", error: "Transcript extraction failed", details: String(err) });
