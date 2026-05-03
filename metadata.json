@@ -1,6 +1,6 @@
 {
-  "name": "Murat Karakaya Akademi",
-  "description": "YouTube kanallarını analiz eden teknik LinkedIn bültenleri oluşturan yapay zeka asistanı.",
+  "name": "YouTube Kaynaklı YZ Haber Yazıcısı",
+  "description": "YouTube kanallarını analiz eden teknik LinkedIn gönderisi oluşturan yapay zeka asistanı.",
   "requestFramePermissions": [],
   "majorCapabilities": []
 }

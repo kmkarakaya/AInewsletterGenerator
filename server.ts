@@ -1,7 +1,7 @@
 import express from 'express';
 import { createServer as createViteServer } from 'vite';
 import { YoutubeTranscript } from 'youtube-transcript/dist/youtube-transcript.esm.js';
-import Parser from 'rss-parser';
+import yts from 'yt-search';
 import path from 'path';
 import { fileURLToPath } from 'url';
 
@@ -12,44 +12,65 @@ async function startServer() {
   try {
     const app = express();
     const PORT = 3000;
-    const parser = new Parser();
 
     app.use(express.json());
 
-    // API Route: Deterministically fetch latest videos via RSS
-    app.post('/api/videos', async (req, res) => {
+    // API Route: Deterministically fetch latest videos via YouTube Search
+    app.post('/api/channels/videos', async (req, res) => {
       try {
         const { channels } = req.body;
         const videos: any[] = [];
 
         for (const channel of channels) {
           try {
-            const cleanChannelName = channel.replace('@', '').replace(/[\s\(\)]/g, '');
-            const feed = await parser.parseURL(`https://corsproxy.io/?https://www.youtube.com/feeds/videos.xml?user=${cleanChannelName}`);
+            const cleanName = channel.replace('@', '');
+            // sp: 'CAI=' is YouTube's sort by upload date. This ensures we get the newest videos first.
+            const searchResult = await yts({ query: cleanName, sp: 'CAI=' });
             
-            feed.items.slice(0, 3).forEach(item => {
+            // Filter strictly by the author name containing the channel name (case-insensitive) to avoid unrelated videos
+            let channelVideos = searchResult.videos.filter(v => 
+               v.author?.name?.toLowerCase().includes(cleanName.toLowerCase()) || 
+               v.author?.url?.toLowerCase().includes(cleanName.toLowerCase())
+            );
+            
+            // Further filter by date: only keep videos uploaded in the last week
+            channelVideos = channelVideos.filter(v => {
+               if (!v.ago) return false;
+               const lowerResult = v.ago.toLowerCase();
+               if (lowerResult.includes('month') || lowerResult.includes('year')) return false;
+               if (lowerResult.includes('second') || lowerResult.includes('minute') || lowerResult.includes('hour') || lowerResult.includes('day') || lowerResult.includes('week')) {
+                  if (lowerResult.includes('week')) {
+                     const match = lowerResult.match(/(\d+)\s+week/);
+                     if (match && parseInt(match[1]) > 1) return false;
+                  }
+                  if (lowerResult.includes('day')) {
+                     const match = lowerResult.match(/(\d+)\s+day/);
+                     if (match && parseInt(match[1]) > 7) return false;
+                  }
+                  return true;
+               }
+               return false;
+            });
+            
+            channelVideos = channelVideos.slice(0, 5);
+
+            channelVideos.forEach(v => {
               videos.push({
                 channel: channel,
-                date: item.pubDate ? new Date(item.pubDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
-                title: item.title,
-                views: Math.floor(Math.random() * 500) + 10 + "K",
-                videoId: item.id?.replace('yt:video:', '') || ''
+                date: v.ago || new Date().toISOString().split('T')[0],
+                title: v.title,
+                views: v.views ? v.views.toString() : "Bilinmiyor",
+                videoId: v.videoId,
+                url: v.url
               });
             });
           } catch (e) {
-            console.error(`RSS Error for ${channel}:`, e);
-            videos.push({
-                channel: channel,
-                date: new Date().toISOString().split('T')[0],
-                title: `Latest Release from ${channel}`,
-                views: "120K",
-                videoId: "dQw4w9WgXcQ"
-            });
+            console.error(`Arama API Hatası (${channel}):`, e);
           }
         }
         res.json({ videos });
       } catch (err) {
-        console.error(err);
+        console.error("Genel Video Araştırma Hatası:", err);
         res.status(500).json({ error: String(err) });
       }
     });
@@ -64,8 +85,12 @@ async function startServer() {
           const fullText = transcriptParts.map(t => t.text).join(' ');
           res.json({ text: fullText });
       } catch (err) {
-          console.error("Transcript fetch error:", err);
-          res.status(500).json({ error: "Transcript extraction failed", details: String(err) });
+          const errStr = String(err);
+          // Omit noisy console.errors for common transcript disabled scenarios
+          if (!errStr.includes("Transcript is disabled")) {
+            console.error("Transcript fetch error:", err);
+          }
+          res.json({ text: "", error: "Transcript extraction failed", details: errStr });
       }
     });
 

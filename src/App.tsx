@@ -28,6 +28,8 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<ApiConnectionStatus | null>(null);
   const [imageLoading, setImageLoading] = useState(false);
+  const [textLoading, setTextLoading] = useState(false);
+  const [revisionPrompt, setRevisionPrompt] = useState("");
   const [result, setResult] = useState<NewsletterResult | null>(null);
   const [copying, setCopying] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -40,6 +42,8 @@ export default function App() {
   const [progress, setProgress] = useState(0);
   const [subStatus, setSubStatus] = useState("");
 
+  const [showRawData, setShowRawData] = useState(false);
+
   const newsletterRef = useRef<HTMLDivElement>(null);
 
   const addLog = (message: string, type: 'info' | 'success' | 'error' | 'step' = 'info') => {
@@ -47,6 +51,87 @@ export default function App() {
   };
 
   const politeDelay = (ms: number) => new Promise(resolve => setTimeout(resolve, ms + Math.random() * 500));
+
+  const handleRegenerateText = async () => {
+    if (!result || !processedSources.length) return;
+    
+    addLog("BÜLTEN METNİ YENİDEN OLUŞTURULUYOR...", "step");
+    if (revisionPrompt) {
+      addLog(`[BİLGİ] Kullanıcı düzeltme isteği eklendi: "${revisionPrompt}"`, "info");
+    }
+    setTextLoading(true);
+    try {
+      // Pass the current requested revision prompt and the latest version of the newsletter
+      const data = await generateNewsletter(processedSources, revisionPrompt, result.content);
+      
+      if (data && !data.error) {
+        setResult(prev => {
+          if (!prev) return null;
+          const prevHistory = prev.contentHistory || (prev.content ? [prev.content] : []);
+          return { 
+            ...prev, 
+            content: data.content, 
+            contentHistory: [data.content, ...prevHistory],
+            imagePrompt: data.imagePrompt
+          };
+        });
+        setRevisionPrompt(""); // Clear input on success
+        addLog("[OK] Bülten metni ve dinamik görsel promptu başarıyla oluşturuldu.", "success");
+        
+        // Start generating image automatically with the new prompt
+        addLog("YENİ METNE UYGUN BÜLTEN GÖRSELİ OLUŞTURULUYOR...", "step");
+        setImageLoading(true);
+        try {
+          const imageUrl = await generateImage(data.imagePrompt);
+          if (imageUrl) {
+            setResult(prev => {
+              if (!prev) return null;
+              const prevUrls = prev.imageUrls || (prev.imageUrl ? [prev.imageUrl] : []);
+              return { ...prev, imageUrl: imageUrl, imageUrls: [imageUrl, ...prevUrls] };
+            });
+            addLog("[OK] İnfografik görseli başarıyla oluşturuldu.", "success");
+          } else {
+            addLog("[UYARI] Görsel üretilemedi (Görsel servisi yanıt vermedi).", "info");
+          }
+        } catch (imgErr) {
+          addLog(`[HATA] Görsel servisi hatası: ${String(imgErr)}`, "error");
+        } finally {
+          setImageLoading(false);
+        }
+      } else {
+        addLog("[UYARI] Bülten metni üretilemedi.", "error");
+      }
+    } catch (err) {
+      addLog(`[HATA] Metin yenilenemedi: ${String(err)}`, "error");
+    } finally {
+      setTextLoading(false);
+    }
+  };
+
+  const handleRegenerateImage = async () => {
+    if (!result?.imagePrompt) return;
+    
+    addLog("BÜLTEN GÖRSELİ YENİDEN OLUŞTURULUYOR...", "step");
+    setImageLoading(true);
+    try {
+      const imageUrl = await generateImage(result.imagePrompt);
+      if (imageUrl) {
+        setResult(prev => {
+          if (!prev) return null;
+          const prevUrls = prev.imageUrls || (prev.imageUrl ? [prev.imageUrl] : []);
+          return { ...prev, imageUrl: imageUrl, imageUrls: [imageUrl, ...prevUrls] };
+        });
+        addLog("[OK] İnfografik görseli başarıyla yeniden oluşturuldu.", "success");
+      } else {
+        addLog("[UYARI] Görsel üretilemedi (Görsel servisi yanıt vermedi).", "info");
+      }
+    } catch (imgErr) {
+      const imgErrMsg = imgErr instanceof Error ? imgErr.message : String(imgErr);
+      addLog(`[HATA] Görsel üretilemedi: ${imgErrMsg}`, "error");
+    } finally {
+      setImageLoading(false);
+    }
+  };
 
   const handleGenerate = async () => {
     setLoading(true);
@@ -134,7 +219,7 @@ export default function App() {
           const valB = parseFloat(b.views?.replace(/[^\d.]/g, '') || '0') * (b.views?.includes('M') ? 1000000 : b.views?.includes('K') ? 1000 : 1);
           return valB - valA;
         })
-        .slice(0, 3);
+        .slice(0, 5);
 
       addLog(`[KARAR] Analiz için en popüler ${topVideos.length} video seçildi:`, "step");
       topVideos.forEach((v, i) => {
@@ -158,10 +243,17 @@ export default function App() {
         
         let transcriptText = "";
         if (source.videoId) {
-           transcriptText = await fetchTranscriptData(source.videoId);
+           transcriptText = await fetchTranscriptData(source.videoId, source.url);
         }
         
         const status = transcriptText.length > 50 ? 'success' : 'failed';
+        
+        if (status === 'success') {
+             addLog(`[BAŞARILI] "${source.title}" - ${source.views} izlenme. Transkript: ${transcriptText.length} karakter indirildi. URL: ${source.url}`, "success");
+        } else {
+             addLog(`[HATA/UYARI] "${source.title}" videosu için transkript alınamadı. (Altyazı desteklenmiyor veya engelli)`, "error");
+        }
+
         const updatedSource: VideoSource = { ...source, transcriptStatus: status, transcript: transcriptText };
         results.push(updatedSource);
         setProcessedSources([...results]);
@@ -190,7 +282,7 @@ export default function App() {
       addLog("BÜLTEN MİMARİSİ OLUŞTURULUYOR...", "step");
       setSubStatus("Murat Karakaya Akademi stilinde LinkedIn bülteni yazılıyor...");
       const data = await generateNewsletter(results);
-      setResult(data);
+      setResult({ ...data, contentHistory: [data.content] });
       addLog("[OK] LinkedIn bülten taslağı hazırlandı.", "success");
       setProgress(95);
 
@@ -202,7 +294,7 @@ export default function App() {
         try {
           const imageUrl = await generateImage(data.imagePrompt);
           if (imageUrl) {
-            setResult(prev => prev ? { ...prev, imageUrl: imageUrl || undefined } : null);
+            setResult(prev => prev ? { ...prev, imageUrl: imageUrl || undefined, imageUrls: [imageUrl] } : null);
             addLog("[OK] İnfografik görseli başarıyla oluşturuldu.", "success");
           } else {
             addLog("[UYARI] Görsel üretilemedi (Görsel servisi yanıt vermedi).", "info");
@@ -289,7 +381,26 @@ export default function App() {
               MURAT KARAKAYA AKADEMİ
             </div>
             <div className="font-mono text-sm text-brand-dim">
-              11 — 18 NİSAN 2026
+              {(() => {
+                const today = new Date();
+                const lastWeek = new Date(today);
+                lastWeek.setDate(today.getDate() - 7);
+                const months = ["OCAK", "ŞUBAT", "MART", "NİSAN", "MAYIS", "HAZİRAN", "TEMMUZ", "AĞUSTOS", "EYLÜL", "EKİM", "KASIM", "ARALIK"];
+                const startDay = lastWeek.getDate();
+                const startMonth = months[lastWeek.getMonth()];
+                const startYear = lastWeek.getFullYear();
+                const endDay = today.getDate();
+                const endMonth = months[today.getMonth()];
+                const endYear = today.getFullYear();
+                
+                if (startMonth === endMonth && startYear === endYear) {
+                  return `${startDay} — ${endDay} ${endMonth} ${endYear}`;
+                } else if (startYear === endYear) {
+                  return `${startDay} ${startMonth} — ${endDay} ${endMonth} ${endYear}`;
+                } else {
+                  return `${startDay} ${startMonth} ${startYear} — ${endDay} ${endMonth} ${endYear}`;
+                }
+              })()}
             </div>
             <button
               onClick={handleGenerate}
@@ -505,17 +616,30 @@ export default function App() {
                 >
                   {result.sourcesFound ? (
                     <div className="space-y-12">
-                      <div className="flex items-center justify-between border-b border-brand-line pb-4">
-                        <h2 className="font-mono text-xs font-bold uppercase tracking-[0.3em] text-brand-accent flex items-center gap-2">
-                          <Newspaper size={14} /> NEWSLETTER_OUTPUT
-                        </h2>
-                        <button
-                          onClick={() => copyToClipboard(result.content)}
-                          className="font-mono text-[10px] uppercase tracking-widest text-brand-dim hover:text-brand-accent flex items-center gap-2 transition-colors"
-                        >
-                          {copying ? <Check size={12} /> : <Copy size={12} />}
-                          {copying ? "KOPYALANDI" : "KOPYALA"}
-                        </button>
+                      <div className="space-y-4 border-b border-brand-line pb-8">
+                        <div className="flex items-center gap-4">
+                          <h2 className="font-mono text-xs font-bold uppercase tracking-[0.3em] text-brand-accent flex items-center gap-2">
+                            <Newspaper size={14} /> NEWSLETTER_OUTPUT
+                          </h2>
+                        </div>
+                        <div className="space-y-2">
+                          <label className="font-mono text-[9px] uppercase tracking-widest text-brand-dim">BU METİNDE DEĞİŞTİRMEK İSTEDİĞİNİZ BİR ŞEY VAR MI? (OPSİYONEL):</label>
+                          <div className="flex flex-col sm:flex-row gap-4">
+                            <textarea
+                              value={revisionPrompt}
+                              onChange={e => setRevisionPrompt(e.target.value)}
+                              placeholder="Örn: Daha kısa ve öz yaz. Teknik terimleri azalt..."
+                              className="flex-1 bg-brand-surface/20 border border-brand-line p-3 font-mono text-[10px] leading-relaxed text-brand-text focus:border-brand-accent outline-none resize-y min-h-[60px] transition-colors"
+                            />
+                            <button
+                              onClick={handleRegenerateText}
+                              disabled={textLoading}
+                              className={`font-mono text-[10px] uppercase tracking-widest flex items-center justify-center gap-2 px-6 py-3 border whitespace-nowrap ${textLoading ? "border-brand-line text-brand-dim cursor-wait bg-transparent" : "border-brand-accent bg-brand-accent/5 text-brand-accent hover:bg-brand-accent hover:text-black transition-colors"}`}
+                            >
+                              <RefreshCw size={14} className={textLoading ? "animate-spin" : ""} /> YENİ METİN OLUŞTUR
+                            </button>
+                          </div>
+                        </div>
                       </div>
 
                       {/* Common Topics Summary */}
@@ -532,11 +656,65 @@ export default function App() {
                         </div>
                       )}
 
-                      <div 
-                        ref={newsletterRef}
-                        className="font-sans text-xl md:text-2xl font-light leading-relaxed whitespace-pre-wrap text-brand-text selection:bg-brand-accent selection:text-black"
-                      >
-                        <Markdown>{result.content}</Markdown>
+                      {textLoading && (
+                        <div className="p-12 border border-brand-line bg-brand-surface/20 flex flex-col items-center justify-center space-y-4">
+                          <RefreshCw size={32} className="animate-spin text-brand-accent/50" />
+                          <span className="font-mono text-[10px] text-brand-dim uppercase tracking-widest animate-pulse">
+                            YENİ METİN YAZILIYOR...
+                          </span>
+                        </div>
+                      )}
+
+                      <div className="space-y-12" ref={newsletterRef}>
+                        {(result.contentHistory || [result.content]).map((content, idx) => (
+                          <div key={idx} className="space-y-6 pb-12 border-b border-brand-line/50 last:border-b-0">
+                            <div className="flex items-center justify-between">
+                              <span className="font-mono text-[10px] uppercase tracking-widest text-brand-dim">
+                                VERSİYON { (result.contentHistory?.length || 1) - idx } {idx === 0 && "(EN YENİ)"}
+                              </span>
+                              <button
+                                onClick={() => copyToClipboard(content)}
+                                className="font-mono text-[10px] uppercase tracking-widest text-brand-dim hover:text-brand-accent flex items-center gap-2 transition-colors"
+                              >
+                                {copying ? <Check size={12} /> : <Copy size={12} />}
+                                {copying ? "KOPYALANDI" : "KOPYALA"}
+                              </button>
+                            </div>
+                            <div className="font-sans text-xl md:text-2xl font-light leading-relaxed whitespace-pre-wrap text-brand-text selection:bg-brand-accent selection:text-black">
+                              <Markdown>{content}</Markdown>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+
+                      {/* RAW DATA ACCORDION / TOGGLE */}
+                      <div className="mt-12 pt-8 border-t border-brand-line">
+                          <button 
+                            onClick={() => setShowRawData(!showRawData)}
+                            className="flex items-center gap-2 text-sm font-semibold text-brand-accent hover:text-white transition-colors uppercase tracking-widest font-mono"
+                          >
+                            <ListRestart className="w-4 h-4" />
+                            {showRawData ? '[ HAM VERİLERİ GİZLE ]' : '[ YAPAY ZEKANIN OKUDUĞU HAM VERİLERİ (TRANSKRİPT) İNCELE ]'}
+                          </button>
+                          
+                          {showRawData && (
+                            <div className="mt-6 space-y-4">
+                              {processedSources.map((src, i) => (
+                                <div key={i} className="p-4 bg-brand-surface/20 border border-brand-line text-xs font-mono text-brand-dim">
+                                   <div className="flex justify-between items-center mb-2">
+                                     <div className="font-bold text-brand-text text-sm">{src.channel} - {src.title}</div>
+                                     <div className="text-brand-accent">{src.views} izlenme • {src.date}</div>
+                                   </div>
+                                   <a href={src.url} target="_blank" rel="noopener noreferrer" className="text-blue-400 hover:underline mb-4 block">
+                                     {src.url}
+                                   </a>
+                                   <div className="mt-4 text-brand-text/70 max-h-64 overflow-y-auto whitespace-pre-wrap bg-black/40 p-4 border border-brand-line/50 font-sans text-sm">
+                                     {src.transcriptStatus === 'success' ? src.transcript : 'YOUTUBE BU VİDEONUN ERİŞİMİNE (TRANSKRİPTİNE) İZİN VERMEDİ.'}
+                                   </div>
+                                </div>
+                              ))}
+                            </div>
+                          )}
                       </div>
 
                       <div className="flex flex-col sm:flex-row gap-4 pt-4">
@@ -550,7 +728,7 @@ export default function App() {
                           `}
                         >
                           {copying ? <Check size={16} /> : <Copy size={16} />}
-                          {copying ? "METİN KOPYALANDI" : "LINKEDIN İÇİN METNİ KOPYALA"}
+                          {copying ? "METİN KOPYALANDI" : "EN YENİ METNİ KOPYALA"}
                         </button>
                       </div>
 
@@ -628,20 +806,33 @@ export default function App() {
                   animate={{ opacity: 1 }}
                   className="space-y-12"
                 >
-                  <p className="text-3xl font-light text-brand-accent leading-tight tracking-tight">
-                    Otonom ajanlar ve yerel model mimarilerindeki paradigma değişimi, üretim bandından sahaya iniyor.
-                  </p>
-                  
                   <div className="space-y-6">
-                    <h3 className="font-mono text-[10px] uppercase tracking-[0.4em] text-brand-dim pb-4 border-b border-brand-line">HEDEF_KAYNAK_LİSTESİ</h3>
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4 font-mono text-xs uppercase tracking-widest">
-                      {["@matthew_berman", "@code (Wes Roth)", "@SkillLeapAI", "@OpenAI", "@1littlecoder"].map((s) => (
-                        <div key={s} className="flex items-center gap-3 p-4 border border-brand-line bg-brand-surface/30">
-                          <Terminal size={12} className="text-brand-accent" />
-                          {s}
-                        </div>
-                      ))}
-                    </div>
+                    <h2 className="text-2xl md:text-3xl font-light text-brand-accent leading-tight tracking-tight">
+                      Otomatik Bülten Üretim Sistemine Hoş Geldiniz
+                    </h2>
+                    <p className="text-base md:text-lg text-brand-dim leading-relaxed font-light">
+                      Bu uygulamanın amacı, belirlediğiniz teknik YouTube kanallarının son bir haftada yayınladığı en popüler videoları analiz ederek <strong className="text-brand-text font-normal">hemen paylaşıma hazır, yapay zeka destekli profesyonel bir LinkedIn bülteni</strong> oluşturmaktır. Belirtilen kanallardaki en sıcak gelişmeleri tarar ve size özel bir derleme sunar.
+                    </p>
+                  </div>
+                  
+                  <div className="space-y-6 bg-brand-surface/20 border border-brand-line p-8">
+                    <h3 className="font-mono text-xs uppercase tracking-[0.2em] text-brand-accent flex items-center gap-3">
+                      <Terminal size={14} /> ADIM ADIM KULLANIM
+                    </h3>
+                    <ul className="space-y-6 font-mono text-[10px] md:text-[11px] text-brand-dim uppercase tracking-wider leading-relaxed">
+                      <li className="flex items-start gap-4">
+                        <span className="text-brand-accent mt-0.5">01 //</span>
+                        <span>Yukarıdaki <strong className="text-brand-text">"HEDEF YOUTUBE KANALLARI"</strong> bölümünden bültene dahil edilmesini istediğiniz kaynakları belirleyin veya silebilirsiniz.</span>
+                      </li>
+                      <li className="flex items-start gap-4">
+                        <span className="text-brand-accent mt-0.5">02 //</span>
+                        <span>Sağ üst köşedeki <strong className="text-brand-text">"BÜLTENİ OLUŞTUR"</strong> butonuna tıklayarak süreci başlatın. Bu işlem bağlantı hızınıza ve video sayısına göre biraz süre alabilir.</span>
+                      </li>
+                      <li className="flex items-start gap-4">
+                        <span className="text-brand-accent mt-0.5">03 //</span>
+                        <span>Sistem transkriptleri analiz edecek ve size haber metni ile infografik üretim promptunu sunacaktır. Sonuçları inceleyip dilerseniz yapay zekadan bülten metnini güncel isteklerinize göre revize etmesini isteyebilirsiniz.</span>
+                      </li>
+                    </ul>
                   </div>
                 </motion.div>
               )}
@@ -653,10 +844,10 @@ export default function App() {
             <div className="space-y-12">
               <div className="space-y-6">
                 <h3 className="font-mono text-[10px] uppercase tracking-[0.3em] text-brand-accent border-l-2 border-brand-accent pl-4">
-                  AKADEMİ ÖNGÖRÜSÜ
+                  SİSTEM DURUMU
                 </h3>
-                <p className="text-lg md:text-xl font-light italic leading-relaxed text-brand-text">
-                  "Yapay zeka haberleri artık sadece tüketim değil, stratejik birer teknoloji demosu haline geliyor. Transkriptlerdeki teknik derinlik, yarının mimarisini bugünden kuruyor."
+                <p className="text-sm md:text-base font-light italic leading-relaxed text-brand-dim">
+                  Yapay Zeka ve LLM dünyasındaki yenilikleri hızlı ve etkili şekilde takip edin. Bu asistan, teknik haberleri doğrudan ham kaynaklardan (YouTube transkriptleri) sentezler, manuel araştırma süresini ortadan kaldırır. 
                 </p>
               </div>
 
@@ -666,53 +857,80 @@ export default function App() {
                     BÜLTEN GÖRSELİ
                   </h3>
                   
-                  <div className="relative group overflow-hidden border border-brand-line bg-black flex flex-col">
-                    <div className="aspect-video relative overflow-hidden bg-brand-surface/50">
-                      {imageLoading ? (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center space-y-4">
-                          <RefreshCw size={24} className="animate-spin text-brand-accent/50" />
-                          <span className="font-mono text-[10px] text-brand-dim uppercase tracking-widest animate-pulse">
-                            GÖRSEL OLUŞTURULUYOR...
-                          </span>
-                        </div>
-                      ) : result.imageUrl ? (
-                        <motion.img 
-                          initial={{ opacity: 0, scale: 1.1 }}
-                          animate={{ opacity: 1, scale: 1 }}
-                          src={result.imageUrl} 
-                          alt="AI Newsletter Visual"
-                          className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-105"
-                          referrerPolicy="no-referrer"
+                  <div className="space-y-6">
+                    <div className="relative group overflow-hidden border border-brand-line bg-black flex flex-col p-6 space-y-4">
+                      <div className="space-y-2">
+                        <label className="font-mono text-[9px] uppercase tracking-widest text-brand-accent">IMAGE PROMPT (DÜZENLENEBİLİR):</label>
+                        <textarea
+                          value={result.imagePrompt}
+                          onChange={(e) => setResult(prev => prev ? { ...prev, imagePrompt: e.target.value } : null)}
+                          className="w-full bg-brand-bg border border-brand-line p-3 font-mono text-[10px] leading-relaxed text-brand-dim italic focus:border-brand-accent focus:text-brand-text outline-none resize-y min-h-[100px] transition-colors"
                         />
-                      ) : (
-                        <div className="absolute inset-0 flex items-center justify-center text-brand-dim/30">
-                          <ImageIcon size={48} strokeWidth={1} />
-                        </div>
-                      )}
-                    </div>
-
-                    <div className="p-6 space-y-4">
-                      <p className="font-mono text-[9px] leading-relaxed text-brand-dim italic lowercase">
-                        {result.imagePrompt}
-                      </p>
-                      <div className="flex gap-4 pt-2 border-t border-brand-line/50">
+                      </div>
+                      <div className="flex flex-wrap gap-4 pt-2 border-t border-brand-line/50">
+                        <button
+                          onClick={handleRegenerateImage}
+                          disabled={imageLoading}
+                          className={`font-mono text-[10px] uppercase tracking-widest flex items-center gap-2 ${imageLoading ? "text-brand-dim cursor-wait" : "text-brand-accent hover:underline"}`}
+                        >
+                          <RefreshCw size={10} className={imageLoading ? "animate-spin" : ""} /> YENİDEN OLUŞTUR
+                        </button>
                         <button
                           onClick={() => copyToClipboard(result.imagePrompt || "")}
-                          className="font-mono text-[10px] uppercase tracking-widest text-brand-accent hover:underline flex items-center gap-2"
+                          className="font-mono text-[10px] uppercase tracking-widest text-brand-dim hover:text-brand-text transition-colors flex items-center gap-2"
                         >
                           <Copy size={10} /> PROMPT KOPYALA
                         </button>
-                        {result.imageUrl && (
-                          <a 
-                            href={result.imageUrl} 
-                            download="ai-newsletter-gems.png"
-                            className="font-mono text-[10px] uppercase tracking-widest text-brand-text hover:text-brand-accent flex items-center gap-2"
-                          >
-                            <ExternalLink size={10} /> GÖRSELİ KAYDET
-                          </a>
-                        )}
                       </div>
                     </div>
+
+                    {imageLoading && (
+                      <div className="relative group overflow-hidden border border-brand-line bg-black flex flex-col">
+                        <div className="aspect-video relative overflow-hidden bg-brand-surface/50">
+                          <div className="absolute inset-0 flex flex-col items-center justify-center space-y-4">
+                            <RefreshCw size={24} className="animate-spin text-brand-accent/50" />
+                            <span className="font-mono text-[10px] text-brand-dim uppercase tracking-widest animate-pulse">
+                              GÖRSEL OLUŞTURULUYOR...
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                    )}
+
+                    {(result.imageUrls || (result.imageUrl ? [result.imageUrl] : [])).map((imgUrl, idx) => (
+                      <div key={idx} className="relative group overflow-hidden border border-brand-line bg-black flex flex-col">
+                        <div className="aspect-[16/9] relative overflow-hidden bg-brand-surface/50">
+                          <motion.img 
+                            initial={{ opacity: 0, scale: 1.1 }}
+                            animate={{ opacity: 1, scale: 1 }}
+                            transition={{ duration: 0.7 }}
+                            src={imgUrl} 
+                            alt={`AI Newsletter Visual ${idx + 1}`}
+                            className="absolute inset-0 w-full h-full object-contain transition-transform duration-700 group-hover:scale-105"
+                            referrerPolicy="no-referrer"
+                          />
+                        </div>
+                        <div className="p-4 border-t border-brand-line flex justify-end">
+                          <a 
+                            href={imgUrl} 
+                            download={`ai-newsletter-gems-${idx + 1}.png`}
+                            className="font-mono text-[10px] uppercase tracking-widest text-brand-text hover:text-brand-accent flex items-center gap-2"
+                          >
+                            <ExternalLink size={10} /> GÖRSELİ İNDİR
+                          </a>
+                        </div>
+                      </div>
+                    ))}
+                    
+                    {!imageLoading && !(result.imageUrls?.length || result.imageUrl) && (
+                      <div className="relative group overflow-hidden border border-brand-line bg-black flex flex-col">
+                        <div className="aspect-video relative overflow-hidden bg-brand-surface/50">
+                          <div className="absolute inset-0 flex items-center justify-center text-brand-dim/30">
+                            <ImageIcon size={48} strokeWidth={1} />
+                          </div>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
               )}
@@ -729,16 +947,15 @@ export default function App() {
         </main>
 
         {/* Footer */}
-        <footer className="p-10 md:px-14 md:py-8 flex flex-col md:flex-row items-center justify-between gap-8">
+        <footer className="p-10 md:px-14 md:py-8 flex flex-col md:flex-row items-center justify-between gap-8 border-t border-brand-line bg-black/40">
           <div className="font-mono text-[10px] text-brand-accent uppercase tracking-[0.2em] flex flex-wrap gap-x-6 gap-y-2">
             <span>#MuratKarakayaAkademi</span>
-            <span>#AutonomousAgents</span>
-            <span>#LocalLLM</span>
-            <span>#AIRevolution</span>
+            <span>#AIAutomations</span>
+            <span>#LLM</span>
           </div>
           <div className="text-center md:text-right max-w-lg">
             <p className="font-mono text-[10px] text-brand-dim uppercase tracking-wider leading-relaxed">
-              💬 SORU: Kendi donanımınızda çalışan 12B bir modelin, kurumsal verilerinizi işlemesine mi yoksa genel bir bulut devine mi daha çok güvenirsiniz?
+              YAPAY ZEKA DESTEKLİ HABER BÜLTENİ ÜRETİM ASİSTANI
             </p>
           </div>
         </footer>
