@@ -6,7 +6,7 @@ colorTo: indigo
 sdk: docker
 app_port: 3005
 pinned: false
-short_description: YouTube kaynaklarindan AI bulteni ve infografik ureten Docker Space.
+short_description: AI bulteni ve infografik ureten Docker Space.
 ---
 
 # AInewsletterGenerator
