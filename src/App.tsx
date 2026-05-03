@@ -869,16 +869,9 @@ export default function App() {
                 <motion.div 
                   initial={{ opacity: 0 }}
                   animate={{ opacity: 1 }}
-                  className="space-y-12"
+                  className="flex items-center justify-center h-full min-h-[400px] text-brand-dim/30"
                 >
-                  <div className="space-y-6">
-                    <h2 className="text-xl md:text-2xl font-mono text-brand-accent/50 uppercase tracking-widest flex items-center gap-4">
-                      <Terminal size={16} /> BEKLEMEDE_SİSTEM
-                    </h2>
-                    <p className="text-sm font-mono text-brand-dim leading-relaxed uppercase tracking-wider">
-                      Bülten oluşturma işlemini başlattığınızda loglar ve sonuçlar bu alanda görünecektir.
-                    </p>
-                  </div>
+                  <Terminal size={48} strokeWidth={1} />
                 </motion.div>
               )}
             </AnimatePresence>

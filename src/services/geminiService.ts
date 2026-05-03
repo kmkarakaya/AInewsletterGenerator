@@ -43,15 +43,10 @@ export const checkSourceConnection = async (): Promise<ApiConnectionStatus> => {
 
     if (!basicCheck) throw new Error("API base layers unreachable.");
 
-    // Phase 2: Search Tool Permission Check
-    // This is where most 403 errors happen. We use a real query to trigger the tool properly.
+    // Phase 2: Attempt standard prompt
     const searchCheck = await ai.models.generateContent({
       model: AI_MODELS.TEXT_GENERATION,
       contents: "CURRENT_TIME_AND_DATE_IN_UTC",
-      config: { 
-        tools: [{ googleSearch: {} }],
-        toolConfig: { includeServerSideToolInvocations: true }
-      }
     });
     
     if (searchCheck) {
@@ -121,11 +116,7 @@ export const fetchTranscriptData = async (videoId: string, url?: string, onStatu
 
     const response = await ai.models.generateContent({
       model: AI_MODELS.TEXT_GENERATION,
-      contents: prompt,
-      config: {
-        tools: [{ googleSearch: {} }],
-        toolConfig: { includeServerSideToolInvocations: true }
-      }
+      contents: prompt
     });
 
     if (response.text && response.text.length > 50) {
@@ -248,8 +239,6 @@ export const generateNewsletter = async (sources: VideoSource[], revisionPrompt?
       model: AI_MODELS.TEXT_GENERATION,
       contents: prompt,
       config: {
-        tools: [{ googleSearch: {} }],
-        toolConfig: { includeServerSideToolInvocations: true },
         responseMimeType: "application/json",
         responseSchema: {
           type: Type.OBJECT,
