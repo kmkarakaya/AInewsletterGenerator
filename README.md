@@ -8,7 +8,6 @@ app_port: 3005
 pinned: false
 short_description: AI bulteni ve infografik ureten Docker Space.
 ---
-
 # AInewsletterGenerator
 
 Bu repo, belirli YouTube kanallarındaki son içerikleri tarayıp teknik AI odaklı bir LinkedIn bülteni ve buna eşlik eden infografik görsel oluşturan tam yığın bir uygulamadır.
@@ -19,6 +18,10 @@ Uygulama iki ana parçadan oluşur:
 - Express tabanlı backend proxy ve Gemini orkestrasyonu
 
 Önemli not: Gemini çağrıları artık sadece backend üzerinde çalışır. `GEMINI_API_KEY` istemci bundle'ına gömülmez.
+
+Canlı uygulama:
+
+[![Open Live App on Hugging Face Spaces](https://img.shields.io/badge/Open%20Live%20App-Hugging%20Face%20Spaces-f6c343?logo=huggingface&logoColor=black)](https://huggingface.co/spaces/kmkarakaya/AInewsletterGenerator)
 
 ## Ne Yapar?
 
@@ -33,6 +36,8 @@ Uygulama aşağıdaki zinciri çalıştırır:
 7. Bültene göre ayrı bir image prompt üretir.
 8. Görsel model erişilebilirse bu prompt ile 16:9 bir görsel üretir; erişilemiyorsa promptu korur ve kullanıcıyı uyarır.
 9. Kullanıcı isterse aynı kaynak özetleri üzerinde son bülteni revize ettirir.
+
+![AInewsletterGenerator workflow](workflow.png)
 
 ## Mimari Özeti
 
@@ -792,5 +797,3 @@ Yardımcı bayraklar:
 set DRY_RUN=1
 deploy-hf-space.bat
 ```
-
-
